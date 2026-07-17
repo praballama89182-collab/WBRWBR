@@ -68,17 +68,35 @@ except Exception as e:
     st.error(f"Error parsing file: {e}. Please ensure it is a clean marketplace export.")
     st.stop()
 
-# Standardize and map column headers to prevent text match deviations
+# Standardize and clean trailing/leading whitespaces from headers
 df_raw.columns = df_raw.columns.str.strip()
 
+# ---------------------------------------------------------------------------------
+# ⚡️ RIGOROUS, NON-OVERLAPPING COLUMN MAPPING ENGINE
+# ---------------------------------------------------------------------------------
 col_mapping = {}
 for col in df_raw.columns:
     c_low = col.lower()
-    if 'date' in c_low: col_mapping[col] = 'Date'
-    elif 'portfolio' in c_low: col_mapping[col] = 'Portfolio Name'
-    elif 'sku' in c_low or 'advertised sku' in c_low: col_mapping[col] = 'SKU'
-    elif 'spend' in c_low: col_mapping[col] = 'Spend'
-    elif 'sales' in c_low: col_mapping[col] = 'Sales'
+    
+    # 1. Date column mapping
+    if c_low == 'date' or ( 'date' in c_low and 'reporting' in c_low ):
+        col_mapping[col] = 'Date'
+        
+    # 2. Portfolio Name mapping
+    elif 'portfolio' in c_low:
+        col_mapping[col] = 'Portfolio Name'
+        
+    # 3. Main Advertised SKU mapping (exclude other SKU columns)
+    elif c_low == 'sku' or c_low == 'advertised sku':
+        col_mapping[col] = 'SKU'
+        
+    # 4. Strict Ad Spend column mapping (exclude ACOS/ROAS checks)
+    elif c_low == 'spend' and not any(x in c_low for x in ['acos', 'roas']):
+        col_mapping[col] = 'Spend'
+        
+    # 5. Strict Total Sales mapping (exclude ACOS, ROAS, SKU-level units/sales, other sales)
+    elif ('sales' in c_low or 'revenue' in c_low) and not any(x in c_low for x in ['acos', 'roas', 'sku', 'other']):
+        col_mapping[col] = 'Sales'
 
 df_raw = df_raw.rename(columns=col_mapping)
 
@@ -89,9 +107,10 @@ if 'Date' not in df_raw.columns:
 df_raw['Date'] = pd.to_datetime(df_raw['Date'], errors='coerce')
 df_raw = df_raw.dropna(subset=['Date'])
 
-# Clean and transform numeric advertising inputs
+# Clean and transform numeric advertising inputs safely on unique Series
 for num_col in ['Spend', 'Sales']:
     if num_col in df_raw.columns:
+        # Check Series dtype safely
         if df_raw[num_col].dtype == object:
             df_raw[num_col] = df_raw[num_col].astype(str).str.replace(r'[%\$,]', '', regex=True)
         df_raw[num_col] = pd.to_numeric(df_raw[num_col], errors='coerce').fillna(0.0)
@@ -105,7 +124,7 @@ if 'SKU' not in df_raw.columns:
 
 
 # ---------------------------------------------------------------------------------
-# ⚙️ ADVANCED STRATEGIC PORTFOLIO ROUTING ENGINE
+# ⚙️ STRATEGIC PORTFOLIO ROUTING ENGINE
 # ---------------------------------------------------------------------------------
 def assign_wbr_portfolio(name):
     name_str = str(name).strip().lower()
