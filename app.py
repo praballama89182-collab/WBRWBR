@@ -123,21 +123,21 @@ if 'SKU' not in df_raw.columns:
 
 
 # ---------------------------------------------------------------------------------
-# ⚙️ STRATEGIC PORTFOLIO ROUTING ENGINE (ADAPTED FOR FBM & VIZ EXCLUSIONS)
+# ⚙️ STRICT FBA-ONLY PORTFOLIO ROUTING ENGINE (WITH VIZARI EXCLUSIONS)
 # ---------------------------------------------------------------------------------
 def assign_wbr_portfolio(name):
     name_str = str(name).strip().lower()
     
-    # Exclude FBM entirely
-    if 'fbm' in name_str:
-        return 'EXCLUDE_FILTER'
-    
-    # Exclude anything containing VIZ or VIZARI (even if listed inside FBA name structures)
-    elif 'viz' in name_str or 'vizari' in name_str:
+    # Rule 1: Must have 'fba' in it to even proceed
+    if 'fba' not in name_str:
         return 'EXCLUDE_FILTER'
         
-    # Classify the remaining active FBA Portfolios
-    elif 'map' in name_str:
+    # Rule 2: Exclude if it has VIZ or VIZARI in it (even if it contains FBA)
+    if 'viz' in name_str or 'vizari' in name_str:
+        return 'EXCLUDE_FILTER'
+        
+    # Rule 3: Map the surviving FBA portfolios
+    if 'map' in name_str:
         return 'map'
     elif 'ageing' in name_str:
         return 'ageing'
@@ -148,7 +148,7 @@ def assign_wbr_portfolio(name):
 
 df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
 
-# Filter dataset: Drop excluded FBM, VIZ, and VIZARI portfolios completely
+# Filter dataset: Keep only valid mapped FBA segments
 df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
 
 
@@ -214,8 +214,8 @@ tabs = st.tabs(["📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Anal
 # TAB 1: STRATEGIC PORTFOLIO COMPARISON
 # ---------------------------------------------------------------------------------
 with tabs[0]:
-    st.markdown("<span class='usecase-tag'>Designated Mapped Portfolios (FBA Optimized)</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Analyzes week-over-week efficiency patterns mapped against clean programmatic channel clusters. All FBM, VIZ, and VIZARI portfolios are discarded automatically.</div>", unsafe_allow_html=True)
+    st.markdown("<span class='usecase-tag'>Strict FBA Mapped Portfolios (Non-Vizari)</span>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Week-over-week efficiency metrics for portfolios containing <b>FBA</b>. Portfolios containing <b>VIZ / VIZARI</b> or non-FBA items are entirely excluded.</div>", unsafe_allow_html=True)
     
     # Portfolio Aggregations
     p1_port = df_p1.groupby('Mapped Portfolio').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
@@ -256,7 +256,7 @@ with tabs[0]:
 # ---------------------------------------------------------------------------------
 with tabs[1]:
     st.markdown("<span class='usecase-tag'>Top 20 Brand Prefix SKU Matrix</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Programmatically extracts the leading 4 characters from data SKUs to classify sub-brands. Filtered aggressively for the <b>Top 20 high-revenue lines</b> this week.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Extracts the leading 4 characters from product SKUs across the active FBA inventory pipeline. Limited to the <b>Top 20 high-revenue lines</b> this week.</div>", unsafe_allow_html=True)
     
     # Safe isolation mapping
     df_p1 = df_p1.copy()
