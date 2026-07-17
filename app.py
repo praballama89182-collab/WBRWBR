@@ -1,3 +1,14 @@
+Got it! Let’s clean that up and strip away the extra file complexity. Since TACoS is strictly mapped for the present week metrics highlighted in your header ribbon, we will revert back to **a single Amazon Business Report uploader**.
+
+Here is the revised mathematical workflow applied to **Tab 1: Total FBA Summary**:
+
+* **Inclusions:** Includes baseline `fba` and `map` data fields for the active window.
+* **Exclusions:** Explicitly drops `exclusive`, `cbt`, and `ageing` portfolios from the aggregated calculation blocks.
+* **Columns Displayed:** Outlined exactly as requested: `Portfolio`, `Ad Sales`, `Ad Spends`, `ACoS`, and `TACoS`.
+
+### Complete Updated `app.py`
+
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -71,11 +82,7 @@ st.markdown("---")
 # ---------------------------------------------------------------------------------
 st.sidebar.markdown(f"<h2 style='color: {HEX_DEEP_BLUE}; margin-top: 0;'>📥 Data Pipeline</h2>", unsafe_allow_html=True)
 ad_file = st.sidebar.file_uploader("1️⃣ Upload Sponsored Product Ad Report", type=["csv", "xlsx"])
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📋 Business Reports (No Dates)")
-biz_p1_file = st.sidebar.file_uploader("2️⃣ Previous Week Business Report", type=["csv", "xlsx"])
-biz_p2_file = st.sidebar.file_uploader("3️⃣ This Week Business Report", type=["csv", "xlsx"])
+biz_file = st.sidebar.file_uploader("2️⃣ Upload Present Week Business Report (For TACoS)", type=["csv", "xlsx"])
 
 if not ad_file:
     st.info("👋 **Console Parked:** Please upload your main advertising performance report in the sidebar to begin.")
@@ -153,10 +160,16 @@ def assign_wbr_portfolio(name):
     else: return 'fba'
 
 df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
-df_processed = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER'].copy()
-df_processed['Brand Prefix'] = df_processed['SKU'].astype(str).str[:4].str.upper()
+df_included_auditing = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
+df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 
-# Set date scopes
+# Filter master processing dataset to valid mapped active FBA segments only
+df_processed = df_included_auditing.copy()
+
+
+# ---------------------------------------------------------------------------------
+# 📅 TWO-PERIOD DATE SELECTION FUNNEL
+# ---------------------------------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Live Window Control")
 p1_start = st.sidebar.date_input("P1 Start Date", df_processed['Date'].min())
@@ -168,16 +181,17 @@ df_p1 = df_processed[(df_processed['Date'] >= pd.Timestamp(p1_start)) & (df_proc
 df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_processed['Date'] <= pd.Timestamp(p2_end))]
 
 # ---------------------------------------------------------------------------------
-# ⚡️ SELLER CENTRAL BUSINESS REPORT PARSING ENGINE (TACoS DENOMINATOR)
+# ⚡️ SELLER CENTRAL BUSINESS REPORT PARSING ENGINE (PRESENT WEEK ONLY)
 # ---------------------------------------------------------------------------------
-def clean_biz_report_sales(file_obj):
-    if not file_obj:
-        return 0.0
+biz_sales_p2 = 0.0
+has_tacos_p2 = False
+
+if biz_file:
     try:
-        if file_obj.name.endswith('.csv'):
-            df_b = pd.read_csv(file_obj)
+        if biz_file.name.endswith('.csv'):
+            df_b = pd.read_csv(biz_file)
         else:
-            df_b = pd.read_excel(file_obj)
+            df_b = pd.read_excel(biz_file)
         
         if len(df_b.columns) >= 21:
             sku_header = df_b.columns[3]
@@ -187,46 +201,43 @@ def clean_biz_report_sales(file_obj):
             df_b['Parsed_Rev'] = pd.to_numeric(df_b[sales_header], errors='coerce').fillna(0.0)
             
             df_filtered = df_b[df_b[sku_header].astype(str).str.upper().str.contains('FBA|SNL', regex=True, na=False)]
-            return df_filtered['Parsed_Rev'].sum()
+            biz_sales_p2 = df_filtered['Parsed_Rev'].sum()
+            if biz_sales_p2 > 0:
+                has_tacos_p2 = True
     except Exception as e:
         st.sidebar.error(f"Error parsing business sheet: {e}")
-    return 0.0
 
-biz_sales_p1 = clean_biz_report_sales(biz_p1_file)
-biz_sales_p2 = clean_biz_report_sales(biz_p2_file)
+# Calculate aggregates across present week window for header cards and summary mapping
+p2_fba_subset = df_p2[df_p2['Mapped Portfolio'].isin(['fba', 'map'])]
+t_sp_summary = p2_fba_subset['Spend'].sum()
+t_sl_summary = p2_fba_subset['Sales'].sum()
 
-has_tacos_p1 = (biz_sales_p1 > 0)
-has_tacos_p2 = (biz_sales_p2 > 0)
+t_sp_global = df_p2['Spend'].sum()
+t_sl_global = df_p2['Sales'].sum()
+t_cl_global = df_p2['Clicks'].sum()
+t_im_global = df_p2['Impressions'].sum()
 
-# Calculate global aggregates across active windows for top header cards
-t_sp = df_p2['Spend'].sum()
-t_sl = df_p2['Sales'].sum()
-t_cl = df_p2['Clicks'].sum()
-t_im = df_p2['Impressions'].sum()
-
-t_ac = (t_sp / t_sl * 100) if t_sl > 0 else 0.0
-t_ro = (t_sl / t_sp) if t_sp > 0 else 0.0
-t_ct = (t_cl / t_im * 100) if t_im > 0 else 0.0
-t_cp = (t_sp / t_cl) if t_cl > 0 else 0.0
+t_ac_global = (t_sp_global / t_sl_global * 100) if t_sl_global > 0 else 0.0
+t_ct_global = (t_cl_global / t_im_global * 100) if t_im_global > 0 else 0.0
+t_cp_global = (t_sp_global / t_cl_global) if t_cl_global > 0 else 0.0
 
 df_active_window = df_p2 if not df_p2.empty else df_processed
-df_active_window = df_active_window.copy()
-df_active_window['Derived Brand'] = df_active_window['SKU'].astype(str).str[:4].str.upper()
-unique_brands = df_active_window['Derived Brand'].nunique()
+unique_brands = df_active_window['SKU'].astype(str).str[:4].str.upper().nunique()
 
-# KPI Top Ribbon Block
+# KPI Header Cards Ribbon
 col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
 with col_kpi1: st.markdown(f"<div class='kpi-card'><h4>Active Brands</h4><h2>{unique_brands}</h2><p>FBA SKU Prefixes</p></div>", unsafe_allow_html=True)
-with col_kpi2: st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>FBA Budget Spend</h4><h2>${t_sp:,.2f}</h2><p>Blended Total Spend</p></div>", unsafe_allow_html=True)
-with col_kpi3: st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>FBA Total Sales</h4><h2>${t_sl:,.2f}</h2><p>Total Revenue Captured</p></div>", unsafe_allow_html=True)
-with col_kpi4: st.markdown(f"<div class='kpi-card' style='border-top-color: #E67E22;'><h4>Blended ACoS</h4><h2>{t_ac:.2f}%</h2><p>Total Spend / Total Sales</p></div>", unsafe_allow_html=True)
+with col_kpi2: st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>FBA Budget Spend</h4><h2>${t_sp_global:,.2f}</h2><p>Blended Total Spend</p></div>", unsafe_allow_html=True)
+with col_kpi3: st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>FBA Total Sales</h4><h2>${t_sl_global:,.2f}</h2><p>Total Revenue Captured</p></div>", unsafe_allow_html=True)
+with col_kpi4: st.markdown(f"<div class='kpi-card' style='border-top-color: #E67E22;'><h4>Blended ACoS</h4><h2>{t_ac_global:.2f}%</h2><p>Total Spend / Total Sales</p></div>", unsafe_allow_html=True)
 with col_kpi5:
     if has_tacos_p2:
-        st.markdown(f"<div class='kpi-card' style='border-top-color: #9B59B6;'><h4>Blended TACoS</h4><h2>{(t_sp / biz_sales_p2 * 100):.2f}%</h2><p>FBA + SNL Retail Pipeline</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card' style='border-top-color: #9B59B6;'><h4>Blended TACoS</h4><h2>{(t_sp_summary / biz_sales_p2 * 100):.2f}%</h2><p>FBA + SNL Summary Track</p></div>", unsafe_allow_html=True)
     else:
-        st.markdown(f"<div class='kpi-card' style='border-top-color: #CCD1D1;'><h4>Blended TACoS</h4><h2>N/A</h2><p>Upload Report 3 to View</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card' style='border-top-color: #CCD1D1;'><h4>Blended TACoS</h4><h2>N/A</h2><p>Upload Present Week Biz Report</p></div>", unsafe_allow_html=True)
 
 st.markdown("---")
+
 
 # Helper for cell shading matrix
 def style_comparison_matrix(df):
@@ -249,42 +260,25 @@ def style_comparison_matrix(df):
                 style_df.loc[idx, 'ACoS % (Prev)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'ACoS % (This Wk)'] = 'background-color: #FADBD8'
     return style_df
 
+
 tabs = st.tabs(["📋 Total FBA High-Level Summary", "📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Analytics", "💡 Deep-Dive Automated Insights"])
 
 # ---------------------------------------------------------------------------------
-# TAB 1: TOTAL FBA HIGH-LEVEL CHANNELS SUMMARY (SUBTRACTION EXTRACTION LOGIC)
+# TAB 1: TOTAL FBA HIGH-LEVEL CHANNELS SUMMARY (EXCLUDED EXCLUSIVE-CBT-AGEING)
 # ---------------------------------------------------------------------------------
 with tabs[0]:
     st.markdown("<span class='usecase-tag'>Total Business Channel Funnel</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>FBA Summary Matrix:</b> Reflects standard FBA sales and spend values <b>including MAP</b>, while subtracting <b>Exclusive, Ageing, and CBT</b> portfolios completely.</div>", unsafe_allow_html=True)
-    
-    # Compute P1 Segment-level allocations for summary table
-    p1_fba_subset = df_p1[df_p1['Mapped Portfolio'].isin(['fba', 'map'])]
-    p1_sp_summary = p1_fba_subset['Spend'].sum()
-    p1_sl_summary = p1_fba_subset['Sales'].sum()
-    
-    # Compute P2 Segment-level allocations for summary table
-    p2_fba_subset = df_p2[df_p2['Mapped Portfolio'].isin(['fba', 'map'])]
-    p2_sp_summary = p2_fba_subset['Spend'].sum()
-    p2_sl_summary = p2_fba_subset['Sales'].sum()
+    st.markdown("<div class='strategic-banner'><b>FBA Summary Matrix:</b> Reflects present week metrics for standard FBA and MAP segments combined, while discarding Exclusive, CBT, and Ageing portfolios completely.</div>", unsafe_allow_html=True)
     
     high_level_data = {
-        "FBA Portfolio Cohort": ["Previous Period (P1 Summary)", "This Active Period (P2 Summary)"],
-        "Ad Spend": [p1_sp_summary, p2_sp_summary],
-        "Ad Sales": [p1_sl_summary, p2_sl_summary],
-        "ACoS %": [(p1_sp_summary/p1_sl_summary*100) if p1_sl_summary > 0 else 0.0, (p2_sp_summary/p2_sl_summary*100) if p2_sl_summary > 0 else 0.0],
-        "ROAS": [(p1_sl_summary/p1_sp_summary) if p1_sp_summary > 0 else 0.0, (p2_sl_summary/p2_sp_summary) if p2_sp_summary > 0 else 0.0],
-        "TACoS %": [(p1_sp_summary/biz_sales_p1*100) if has_tacos_p1 else np.nan, (p2_sp_summary/biz_sales_p2*100) if has_tacos_p2 else np.nan]
+        "Portfolio": ["FBA"],
+        "Ad Sales": [f"${t_sl_summary:,.2f}"],
+        "Ad Spends": [f"${t_sp_summary:,.2f}"],
+        "ACoS": [f"{((t_sp_summary / t_sl_summary * 100) if t_sl_summary > 0 else 0.0):.2f}%"],
+        "TACoS": [f"{((t_sp_summary / biz_sales_p2 * 100) if has_tacos_p2 else 0.0):.2f}%" if has_tacos_p2 else "N/A"]
     }
     
-    df_high_level = pd.DataFrame(high_level_data)
-    st.dataframe(
-        df_high_level.style.format({
-            'Ad Spend': '${:,.2f}', 'Ad Sales': '${:,.2f}',
-            'ACoS %': '{:.2f}%', 'ROAS': '{:.2f}x', 'TACoS %': lambda x: f"{x:.2f}%" if pd.notnull(x) else "N/A"
-        }),
-        use_container_width=True
-    )
+    st.dataframe(pd.DataFrame(high_level_data), use_container_width=True)
 
 # ---------------------------------------------------------------------------------
 # TAB 2: PORTFOLIO ENGINE
@@ -376,10 +370,9 @@ with tabs[3]:
         st.markdown(f"**ACoS deteriorated from {poor_b_row['ACoS % (Prev)']:.2f}% up to {poor_b_row['ACoS % (This Wk)']:.2f}% despite grossing ${poor_b_row['Sales (This Wk)']:,.2f} in sales.**")
         st.write(f"While the `{b_pfx_fail}` inventory line maintains solid revenue volume, it is running into rising costs due to competitive bidding from other sellers. Higher click costs and lower page conversion rates mean an optimization sweep is needed to cut out low-converting search terms and protect net product margins.")
 
-    # Master Consolidated Workbook Exporter
+    # Master Workbook Export Engine
     master_buffer = io.BytesIO()
     with pd.ExcelWriter(master_buffer, engine='xlsxwriter') as writer:
-        df_high_level.to_excel(writer, sheet_name='Channel High Level WBR', index=False)
         final_port.to_excel(writer, sheet_name='Portfolio Performance WBR', index=False)
         top_20.to_excel(writer, sheet_name='Vendor SKU WBR', index=False)
         
@@ -389,3 +382,31 @@ with tabs[3]:
         file_name="Master_WBR_Comparison_Unified.xlsx",
         mime="application/vnd.ms-excel"
     )
+
+# ---------------------------------------------------------------------------------
+# 🔍 GLOBAL LAYOUT FOOTER: PIPELINE AUDIT LOG DIRECTORIES (BELOW EVERY TAB)
+# ---------------------------------------------------------------------------------
+st.markdown("---")
+st.markdown("### 🔍 Portfolio Pipeline Audit Logs")
+
+with st.expander("👀 Click to Expand: Included FBA Portfolios & Campaigns"):
+    st.markdown("**The following active FBA portfolios and campaigns are built directly into your KPI calculations and tabs above:**")
+    if not df_included_auditing.empty:
+        audit_inc = df_included_auditing.groupby(['Mapped Portfolio', 'Portfolio Name'])['Campaign Name'].unique().reset_index()
+        for idx, row in audit_inc.iterrows():
+            st.markdown(f"**📂 Segment:** `{row['Mapped Portfolio']}` | **Portfolio:** `{row['Portfolio Name']}` *({len(row['Campaign Name'])} campaigns)*")
+            st.caption(", ".join(sorted(row['Campaign Name'])))
+    else:
+        st.warning("No active records matched your FBA routing rules.")
+        
+with st.expander("❌ Click to Expand: Excluded Portfolios & Campaigns (FBM / Vizari / Non-FBA)"):
+    st.markdown("**The following items failed the FBA validation engine criteria and were automatically omitted from the dashboard tables:**")
+    if not df_excluded_auditing.empty:
+        audit_exc = df_excluded_auditing.groupby('Portfolio Name')['Campaign Name'].unique().reset_index()
+        for idx, row in audit_exc.iterrows():
+            st.markdown(f"**🗑️ Removed Portfolio:** `{row['Portfolio Name']}` *({len(row['Campaign Name'])} campaigns)*")
+            st.caption(", ".join(sorted(row['Campaign Name'])))
+    else:
+        st.info("No records match standard exclusion criteria.")
+
+```
