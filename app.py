@@ -155,7 +155,6 @@ df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 # Filter master processing dataset to valid mapped active FBA segments only
 df_processed = df_included_auditing.copy()
 
-
 # ---------------------------------------------------------------------------------
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
 # ---------------------------------------------------------------------------------
@@ -228,10 +227,32 @@ with col_kpi5:
 
 st.markdown("---")
 
-# Helper for cell shading matrix
+# Helper for table visual conditioning matrix
 def style_comparison_matrix(df):
     style_df = pd.DataFrame('', index=df.index, columns=df.columns)
     for idx in df.index:
+        # Spend Side-by-Side Highlights
+        if 'Spend (Last Wk)' in df.columns and 'Spend (This Wk)' in df.columns:
+            if df.loc[idx, 'Spend (Last Wk)'] > df.loc[idx, 'Spend (This Wk)']:
+                style_df.loc[idx, 'Spend (Last Wk)'] = 'background-color: #FADBD8'; style_df.loc[idx, 'Spend (This Wk)'] = 'background-color: #D4EFDF'
+            elif df.loc[idx, 'Spend (Last Wk)'] < df.loc[idx, 'Spend (This Wk)']:
+                style_df.loc[idx, 'Spend (Last Wk)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'Spend (This Wk)'] = 'background-color: #FADBD8'
+        
+        # Sales Side-by-Side Highlights
+        if 'Sales (Last Wk)' in df.columns and 'Sales (This Wk)' in df.columns:
+            if df.loc[idx, 'Sales (Last Wk)'] > df.loc[idx, 'Sales (This Wk)']:
+                style_df.loc[idx, 'Sales (Last Wk)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'Sales (This Wk)'] = 'background-color: #FADBD8'
+            elif df.loc[idx, 'Sales (Last Wk)'] < df.loc[idx, 'Sales (This Wk)']:
+                style_df.loc[idx, 'Sales (Last Wk)'] = 'background-color: #FADBD8'; style_df.loc[idx, 'Sales (This Wk)'] = 'background-color: #D4EFDF'
+        
+        # ACoS Side-by-Side Highlights
+        if 'ACoS (Last Wk)' in df.columns and 'ACoS (This Wk)' in df.columns:
+            if df.loc[idx, 'ACoS (Last Wk)'] > df.loc[idx, 'ACoS (This Wk)']:
+                style_df.loc[idx, 'ACoS (Last Wk)'] = 'background-color: #FADBD8'; style_df.loc[idx, 'ACoS (This Wk)'] = 'background-color: #D4EFDF'
+            elif df.loc[idx, 'ACoS (Last Wk)'] < df.loc[idx, 'ACoS (This Wk)']:
+                style_df.loc[idx, 'ACoS (Last Wk)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'ACoS (This Wk)'] = 'background-color: #FADBD8'
+
+        # Retain support for standard portfolio naming layout metrics
         if 'Spend (Prev)' in df.columns and 'Spend (This Wk)' in df.columns:
             if df.loc[idx, 'Spend (Prev)'] > df.loc[idx, 'Spend (This Wk)']:
                 style_df.loc[idx, 'Spend (Prev)'] = 'background-color: #FADBD8'; style_df.loc[idx, 'Spend (This Wk)'] = 'background-color: #D4EFDF'
@@ -293,22 +314,34 @@ with tabs[1]:
     )
 
 # ---------------------------------------------------------------------------------
-# TAB 3: VENDOR BRAND PREFIX ANNOTATION
+# TAB 3: VENDOR SKU PREFIX ANALYTICS (SIDE-BY-SIDE ORDER STRUCTURE)
 # ---------------------------------------------------------------------------------
 with tabs[2]:
     p1_brand = df_p1.groupby('Brand Prefix').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
     p2_brand = df_p2.groupby('Brand Prefix').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
     
-    merged_brand = pd.merge(p1_brand, p2_brand, on='Brand Prefix', how='outer', suffixes=(' (Prev)', ' (This Wk)')).fillna(0.0)
-    merged_brand['ACoS % (Prev)'] = np.where(merged_brand['Sales (Prev)'] > 0, (merged_brand['Spend (Prev)'] / merged_brand['Sales (Prev)']) * 100, 0.0)
-    merged_brand['ACoS % (This Wk)'] = np.where(merged_brand['Sales (This Wk)'] > 0, (merged_brand['Spend (This Wk)'] / merged_brand['Sales (This Wk)']) * 100, 0.0)
+    merged_brand = pd.merge(p1_brand, p2_brand, on='Brand Prefix', how='outer', suffixes=(' (Last Wk)', ' (This Wk)')).fillna(0.0)
+    merged_brand['ACoS (Last Wk)'] = np.where(merged_brand['Sales (Last Wk)'] > 0, (merged_brand['Spend (Last Wk)'] / merged_brand['Sales (Last Wk)']) * 100, 0.0)
+    merged_brand['ACoS (This Wk)'] = np.where(merged_brand['Sales (This Wk)'] > 0, (merged_brand['Spend (This Wk)'] / merged_brand['Sales (This Wk)']) * 100, 0.0)
     
-    top_20 = merged_brand.sort_values(by='Sales (This Wk)', ascending=False).head(20).reset_index(drop=True)
+    # Restructure columns to establish side-by-side metric comparison blocks
+    side_by_side_cols = [
+        'Brand Prefix', 
+        'Spend (Last Wk)', 'Spend (This Wk)', 
+        'Sales (Last Wk)', 'Sales (This Wk)', 
+        'ACoS (Last Wk)', 'ACoS (This Wk)'
+    ]
+    final_brand_sbs = merged_brand.reindex(columns=side_by_side_cols).fillna(0.0)
+    top_20_sbs = final_brand_sbs.sort_values(by='Sales (This Wk)', ascending=False).head(20).reset_index(drop=True)
+    
+    st.markdown("<span class='usecase-tag'>Top 20 Brand Prefix SKU Matrix</span>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Dynamic side-by-side metric layout comparison (Last Week vs This Week). Sorted by current high-revenue lines.</div>", unsafe_allow_html=True)
+    
     st.dataframe(
-        top_20.style.apply(style_comparison_matrix, axis=None).format({
-            'Spend (Prev)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
-            'Sales (Prev)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
-            'ACoS % (Prev)': '{:.2f}%', 'ACoS % (This Wk)': '{:.2f}%'
+        top_20_sbs.style.apply(style_comparison_matrix, axis=None).format({
+            'Spend (Last Wk)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
+            'Sales (Last Wk)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
+            'ACoS (Last Wk)': '{:.2f}%', 'ACoS (This Wk)': '{:.2f}%'
         }),
         use_container_width=True
     )
@@ -331,12 +364,13 @@ with tabs[3]:
         st.write(f"This performance lift is driven by clear structural conversion stability in the `{p_seg_name}` ad groups. Optimized keyword visibility and stable bid limits inside `{top_camp_name}` successfully scaled revenue without bloating customer acquisition thresholds, delivering reliable portfolio profitability.")
 
     # 2. Vendor Brand Prefix Strategy Win Check (Grossing >= $1000 and ACoS improved)
-    valid_wins = merged_brand[(merged_brand['Sales (This Wk)'] >= 1000.0) & (merged_brand['ACoS % (This Wk)'] < merged_brand['ACoS % (Prev)'])]
+    # Re-map internally to matching side-by-side formats
+    valid_wins = top_20_sbs[(top_20_sbs['Sales (This Wk)'] >= 1000.0) & (top_20_sbs['ACoS (This Wk)'] < top_20_sbs['ACoS (Last Wk)'])]
     if not valid_wins.empty:
         best_b_row = valid_wins.sort_values(by='Sales (This Wk)', ascending=False).iloc[0]
         b_pfx = best_b_row['Brand Prefix']
         st.markdown(f"<div class='insight-header'>🟢 Vendor Brand Win: Prefix '{b_pfx}' Scales Profitable Volume</div>", unsafe_allow_html=True)
-        st.markdown(f"**ACoS improved from {best_b_row['ACoS % (Prev)']:.2f}% down to {best_b_row['ACoS % (This Wk)']:.2f}% with total sales crossing ${best_b_row['Sales (This Wk)']:,.2f}.**")
+        st.markdown(f"**ACoS improved from {best_b_row['ACoS (Last Wk)']:.2f}% down to {best_b_row['ACoS (This Wk)']:.2f}% with total sales crossing ${best_b_row['Sales (This Wk)']:,.2f}.**")
         st.write(f"The `{b_pfx}` vendor product catalog effectively hit scaling velocity by focusing on top-performing search term manual campaigns. Restricting lower-intent advertising leak areas minimized wasted spend, which improved target operating efficiency while protecting visibility on top revenue-driving listings.")
 
     # 3. Failures & Loss Corrections
@@ -350,19 +384,19 @@ with tabs[3]:
         st.markdown(f"**ACoS expanded from {poor_port_row['ACoS % (Prev)']:.2f}% up to {poor_port_row['ACoS % (This Wk)']:.2f}%, indicating budget bleed.**")
         st.write(f"The efficiency loss in the `{p_seg_fail}` portfolio highlights a drop in conversion rates relative to overall click costs. Unoptimized automatic ad placements or broad match keywords have consumed too much budget without driving orders, requiring a quick review of negative targets and lower base bids.")
 
-    valid_fails = merged_brand[(merged_brand['Sales (This Wk)'] >= 1000.0) & (merged_brand['ACoS % (This Wk)'] > merged_brand['ACoS % (Prev)'])]
+    valid_fails = top_20_sbs[(top_20_sbs['Sales (This Wk)'] >= 1000.0) & (top_20_sbs['ACoS (This Wk)'] > top_20_sbs['ACoS (Last Wk)'])]
     if not valid_fails.empty:
-        poor_b_row = valid_fails.sort_values(by='ACoS % (This Wk)', ascending=False).iloc[0]
+        poor_b_row = valid_fails.sort_values(by='ACoS (This Wk)', ascending=False).iloc[0]
         b_pfx_fail = poor_b_row['Brand Prefix']
         st.markdown(f"<div class='insight-header'>🔴 Vendor Brand Failure: Prefix `{b_pfx_fail}` Over-Indexed Costs</div>", unsafe_allow_html=True)
-        st.markdown(f"**ACoS deteriorated from {poor_b_row['ACoS % (Prev)']:.2f}% up to {poor_b_row['ACoS % (This Wk)']:.2f}% despite grossing ${poor_b_row['Sales (This Wk)']:,.2f} in sales.**")
+        st.markdown(f"**ACoS deteriorated from {poor_b_row['ACoS (Last Wk)']:.2f}% up to {poor_b_row['ACoS (This Wk)']:.2f}% despite grossing ${poor_b_row['Sales (This Wk)']:,.2f} in sales.**")
         st.write(f"While the `{b_pfx_fail}` inventory line maintains solid revenue volume, it is running into rising costs due to competitive bidding from other sellers. Higher click costs and lower page conversion rates mean an optimization sweep is needed to cut out low-converting search terms and protect net product margins.")
 
     # Master Workbook Export Engine
     master_buffer = io.BytesIO()
     with pd.ExcelWriter(master_buffer, engine='xlsxwriter') as writer:
         final_port.to_excel(writer, sheet_name='Portfolio Performance WBR', index=False)
-        top_20.to_excel(writer, sheet_name='Vendor SKU WBR', index=False)
+        top_20_sbs.to_excel(writer, sheet_name='Vendor SKU WBR', index=False)
         
     st.download_button(
         label="📥 Export Complete Unified Master WBR Report to Excel",
