@@ -1,14 +1,3 @@
-Got it! Let’s clean that up and strip away the extra file complexity. Since TACoS is strictly mapped for the present week metrics highlighted in your header ribbon, we will revert back to **a single Amazon Business Report uploader**.
-
-Here is the revised mathematical workflow applied to **Tab 1: Total FBA Summary**:
-
-* **Inclusions:** Includes baseline `fba` and `map` data fields for the active window.
-* **Exclusions:** Explicitly drops `exclusive`, `cbt`, and `ageing` portfolios from the aggregated calculation blocks.
-* **Columns Displayed:** Outlined exactly as requested: `Portfolio`, `Ad Sales`, `Ad Spends`, `ACoS`, and `TACoS`.
-
-### Complete Updated `app.py`
-
-```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -238,7 +227,6 @@ with col_kpi5:
 
 st.markdown("---")
 
-
 # Helper for cell shading matrix
 def style_comparison_matrix(df):
     style_df = pd.DataFrame('', index=df.index, columns=df.columns)
@@ -259,7 +247,6 @@ def style_comparison_matrix(df):
             elif df.loc[idx, 'ACoS % (Prev)'] < df.loc[idx, 'ACoS % (This Wk)']:
                 style_df.loc[idx, 'ACoS % (Prev)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'ACoS % (This Wk)'] = 'background-color: #FADBD8'
     return style_df
-
 
 tabs = st.tabs(["📋 Total FBA High-Level Summary", "📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Analytics", "💡 Deep-Dive Automated Insights"])
 
@@ -408,5 +395,3 @@ with st.expander("❌ Click to Expand: Excluded Portfolios & Campaigns (FBM / Vi
             st.caption(", ".join(sorted(row['Campaign Name'])))
     else:
         st.info("No records match standard exclusion criteria.")
-
-```
