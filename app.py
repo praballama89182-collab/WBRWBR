@@ -155,7 +155,6 @@ df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 # Filter master processing dataset to valid mapped active FBA segments only
 df_processed = df_included_auditing.copy()
 
-
 # ---------------------------------------------------------------------------------
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
 # ---------------------------------------------------------------------------------
@@ -166,8 +165,12 @@ p1_end = st.sidebar.date_input("P1 End Date", df_processed['Date'].max() - pd.Ti
 p2_start = st.sidebar.date_input("P2 Start Date", df_processed['Date'].max() - pd.Timedelta(days=6))
 p2_end = st.sidebar.date_input("P2 End Date", df_processed['Date'].max())
 
-df_p1 = df_processed[(df_processed['Date'] >= pd.Timestamp(p1_start)) & (df_processed['Date'] <= pd.Timestamp(p1_end))]
-df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_processed['Date'] <= pd.Timestamp(p2_end))]
+df_p1 = df_processed[(df_processed['Date'] >= pd.Timestamp(p1_start)) & (df_processed['Date'] <= pd.Timestamp(p1_end))].copy()
+df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_processed['Date'] <= pd.Timestamp(p2_end))].copy()
+
+# Rigidly force localization of the 4-letter brand identifier key to protect slices
+df_p1['Brand Prefix'] = df_p1['SKU'].astype(str).str[:4].str.upper()
+df_p2['Brand Prefix'] = df_p2['SKU'].astype(str).str[:4].str.upper()
 
 # ---------------------------------------------------------------------------------
 # ⚡️ SELLER CENTRAL BUSINESS REPORT PARSING ENGINE (PRESENT WEEK ONLY)
@@ -210,8 +213,7 @@ t_ac_global = (t_sp_global / t_sl_global * 100) if t_sl_global > 0 else 0.0
 t_ct_global = (t_cl_global / t_im_global * 100) if t_im_global > 0 else 0.0
 t_cp_global = (t_sp_global / t_cl_global) if t_cl_global > 0 else 0.0
 
-df_active_window = df_p2 if not df_p2.empty else df_processed
-unique_brands = df_active_window['SKU'].astype(str).str[:4].str.upper().nunique()
+unique_brands = df_p2['Brand Prefix'].nunique()
 
 # KPI Header Cards Ribbon
 col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
@@ -264,7 +266,6 @@ with tabs[0]:
         "ACoS": [f"{((t_sp_summary / t_sl_summary * 100) if t_sl_summary > 0 else 0.0):.2f}%"],
         "TACoS": [f"{((t_sp_summary / biz_sales_p2 * 100) if has_tacos_p2 else 0.0):.2f}%" if has_tacos_p2 else "N/A"]
     }
-    
     st.dataframe(pd.DataFrame(high_level_data), use_container_width=True)
 
 # ---------------------------------------------------------------------------------
