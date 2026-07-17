@@ -155,6 +155,7 @@ df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 # Filter master processing dataset to valid mapped active FBA segments only
 df_processed = df_included_auditing.copy()
 
+
 # ---------------------------------------------------------------------------------
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
 # ---------------------------------------------------------------------------------
@@ -199,33 +200,31 @@ if biz_file:
     except Exception as e:
         st.sidebar.error(f"Error parsing business sheet: {e}")
 
-# Calculate aggregates across present week window for header cards and summary mapping
-p2_fba_subset = df_p2[df_p2['Mapped Portfolio'].isin(['fba', 'map'])]
-t_sp_summary = p2_fba_subset['Spend'].sum()
-t_sl_summary = p2_fba_subset['Sales'].sum()
+# ---------------------------------------------------------------------------------
+# 🧮 UNIFIED CORE FBA CALCULATIONS (EXCLUDES EXCLUSIVE, CBT, AGEING IN BOTH)
+# ---------------------------------------------------------------------------------
+p2_core_fba = df_p2[df_p2['Mapped Portfolio'].isin(['fba', 'map'])]
+t_sp_core = p2_core_fba['Spend'].sum()
+t_sl_core = p2_core_fba['Sales'].sum()
 
-t_sp_global = df_p2['Spend'].sum()
-t_sl_global = df_p2['Sales'].sum()
-t_cl_global = df_p2['Clicks'].sum()
-t_im_global = df_p2['Impressions'].sum()
+t_ac_core = (t_sp_core / t_sl_core * 100) if t_sl_core > 0 else 0.0
+unique_brands = p2_core_fba['Brand Prefix'].nunique()
 
-t_ac_global = (t_sp_global / t_sl_global * 100) if t_sl_global > 0 else 0.0
-t_ct_global = (t_cl_global / t_im_global * 100) if t_im_global > 0 else 0.0
-t_cp_global = (t_sp_global / t_cl_global) if t_cl_global > 0 else 0.0
-
-unique_brands = df_p2['Brand Prefix'].nunique()
-
-# KPI Header Cards Ribbon
+# KPI Header Cards Ribbon (Now representing Core FBA strictly)
 col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
-with col_kpi1: st.markdown(f"<div class='kpi-card'><h4>Active Brands</h4><h2>{unique_brands}</h2><p>FBA SKU Prefixes</p></div>", unsafe_allow_html=True)
-with col_kpi2: st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>FBA Budget Spend</h4><h2>${t_sp_global:,.2f}</h2><p>Blended Total Spend</p></div>", unsafe_allow_html=True)
-with col_kpi3: st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>FBA Total Sales</h4><h2>${t_sl_global:,.2f}</h2><p>Total Revenue Captured</p></div>", unsafe_allow_html=True)
-with col_kpi4: st.markdown(f"<div class='kpi-card' style='border-top-color: #E67E22;'><h4>Blended ACoS</h4><h2>{t_ac_global:.2f}%</h2><p>Total Spend / Total Sales</p></div>", unsafe_allow_html=True)
+with col_kpi1: 
+    st.markdown(f"<div class='kpi-card'><h4>Active Brands</h4><h2>{unique_brands}</h2><p>Core FBA SKU Prefixes</p></div>", unsafe_allow_html=True)
+with col_kpi2: 
+    st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>Core FBA Spend</h4><h2>${t_sp_core:,.2f}</h2><p>Excludes Excl/CBT/Ageing</p></div>", unsafe_allow_html=True)
+with col_kpi3: 
+    st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>Core FBA Sales</h4><h2>${t_sl_core:,.2f}</h2><p>Core Attributed Rev</p></div>", unsafe_allow_html=True)
+with col_kpi4: 
+    st.markdown(f"<div class='kpi-card' style='border-top-color: #E67E22;'><h4>Core Blended ACoS</h4><h2>{t_ac_core:.2f}%</h2><p>Total Core Spends / Sales</p></div>", unsafe_allow_html=True)
 with col_kpi5:
     if has_tacos_p2:
-        st.markdown(f"<div class='kpi-card' style='border-top-color: #9B59B6;'><h4>Blended TACoS</h4><h2>{(t_sp_summary / biz_sales_p2 * 100):.2f}%</h2><p>FBA + SNL Summary Track</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card' style='border-top-color: #9B59B6;'><h4>Core Blended TACoS</h4><h2>{(t_sp_core / biz_sales_p2 * 100):.2f}%</h2><p>Core Spend / Total Shipped Sales</p></div>", unsafe_allow_html=True)
     else:
-        st.markdown(f"<div class='kpi-card' style='border-top-color: #CCD1D1;'><h4>Blended TACoS</h4><h2>N/A</h2><p>Upload Present Week Biz Report</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='kpi-card' style='border-top-color: #CCD1D1;'><h4>Core Blended TACoS</h4><h2>N/A</h2><p>Upload Present Week Biz Report</p></div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -250,10 +249,11 @@ def style_comparison_matrix(df):
                 style_df.loc[idx, 'ACoS % (Prev)'] = 'background-color: #D4EFDF'; style_df.loc[idx, 'ACoS % (This Wk)'] = 'background-color: #FADBD8'
     return style_df
 
+
 tabs = st.tabs(["📋 Total FBA High-Level Summary", "📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Analytics", "💡 Deep-Dive Automated Insights"])
 
 # ---------------------------------------------------------------------------------
-# TAB 1: TOTAL FBA HIGH-LEVEL CHANNELS SUMMARY (EXCLUDED EXCLUSIVE-CBT-AGEING)
+# TAB 1: TOTAL FBA HIGH-LEVEL CHANNELS SUMMARY (Core FBA strictly matching the cards)
 # ---------------------------------------------------------------------------------
 with tabs[0]:
     st.markdown("<span class='usecase-tag'>Total Business Channel Funnel</span>", unsafe_allow_html=True)
@@ -261,10 +261,10 @@ with tabs[0]:
     
     high_level_data = {
         "Portfolio": ["FBA"],
-        "Ad Sales": [f"${t_sl_summary:,.2f}"],
-        "Ad Spends": [f"${t_sp_summary:,.2f}"],
-        "ACoS": [f"{((t_sp_summary / t_sl_summary * 100) if t_sl_summary > 0 else 0.0):.2f}%"],
-        "TACoS": [f"{((t_sp_summary / biz_sales_p2 * 100) if has_tacos_p2 else 0.0):.2f}%" if has_tacos_p2 else "N/A"]
+        "Ad Sales": [f"${t_sl_core:,.2f}"],
+        "Ad Spends": [f"${t_sp_core:,.2f}"],
+        "ACoS": [f"{t_ac_core:.2f}%"],
+        "TACoS": [f"{((t_sp_core / biz_sales_p2 * 100) if has_tacos_p2 else 0.0):.2f}%" if has_tacos_p2 else "N/A"]
     }
     st.dataframe(pd.DataFrame(high_level_data), use_container_width=True)
 
