@@ -21,7 +21,17 @@ HEX_LIGHT_BLUE = "#D5DEE7"
 st.markdown(f"""
     <style>
     .main {{ background-color: #FBFBFC; }}
-    .kpi-title {{ font-size: 14px; color: #7f8c8d; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }}
+    .kpi-card {{
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(58, 65, 75, 0.06);
+        border-top: 5px solid {HEX_DEEP_BLUE};
+        text-align: center;
+    }}
+    .kpi-card h4 {{ margin: 0 0 6px 0; color: #7f8c8d; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; }}
+    .kpi-card h2 {{ margin: 0; color: {HEX_DARK_SLATE}; font-size: 28px; font-weight: 800; }}
+    .kpi-card p {{ margin: 4px 0 0 0; font-size: 13px; font-weight: 600; color: #566573; }}
     .strategic-banner {{
         background-color: #ffffff;
         padding: 20px;
@@ -120,6 +130,8 @@ if 'Portfolio Name' not in df_raw.columns:
     df_raw['Portfolio Name'] = 'General Portfolio'
 if 'SKU' not in df_raw.columns:
     df_raw['SKU'] = 'GEN-UNKNOWN'
+if 'Campaign Name' not in df_raw.columns:
+    df_raw['Campaign Name'] = 'Generic Campaign'
 
 
 # ---------------------------------------------------------------------------------
@@ -148,8 +160,12 @@ def assign_wbr_portfolio(name):
 
 df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
 
-# Filter dataset: Keep only valid mapped FBA segments
-df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
+# Capture references before dropping row records for auditing expansion below
+df_included_auditing = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
+df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
+
+# Filter master processing dataset to valid mapped active FBA segments only
+df_processed = df_included_auditing.copy()
 
 
 # ---------------------------------------------------------------------------------
@@ -157,16 +173,58 @@ df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
 # ---------------------------------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Period 1 Scope (Previous Week)")
-p1_start = st.sidebar.date_input("P1 Start Date", df_raw['Date'].min())
-p1_end = st.sidebar.date_input("P1 End Date", df_raw['Date'].max() - pd.Timedelta(days=7))
+p1_start = st.sidebar.date_input("P1 Start Date", df_processed['Date'].min())
+p1_end = st.sidebar.date_input("P1 End Date", df_processed['Date'].max() - pd.Timedelta(days=7))
 
 st.sidebar.markdown("### 📅 Period 2 Scope (This Week)")
-p2_start = st.sidebar.date_input("P2 Start Date", df_raw['Date'].max() - pd.Timedelta(days=6))
-p2_end = st.sidebar.date_input("P2 End Date", df_raw['Date'].max())
+p2_start = st.sidebar.date_input("P2 Start Date", df_processed['Date'].max() - pd.Timedelta(days=6))
+p2_end = st.sidebar.date_input("P2 End Date", df_processed['Date'].max())
 
 # Isolate periods
-df_p1 = df_raw[(df_raw['Date'] >= pd.Timestamp(p1_start)) & (df_raw['Date'] <= pd.Timestamp(p1_end))]
-df_p2 = df_raw[(df_raw['Date'] >= pd.Timestamp(p2_start)) & (df_raw['Date'] <= pd.Timestamp(p2_end))]
+df_p1 = df_processed[(df_processed['Date'] >= pd.Timestamp(p1_start)) & (df_processed['Date'] <= pd.Timestamp(p1_end))]
+df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_processed['Date'] <= pd.Timestamp(p2_end))]
+
+
+# ---------------------------------------------------------------------------------
+# 👑 EXECUTIVE DYNAMIC BRAND OVERVIEW RIBBON (FIX FOR EMPTY OVERVIEW)
+# ---------------------------------------------------------------------------------
+df_active_window = df_p2 if not df_p2.empty else df_processed
+
+df_active_window = df_active_window.copy()
+df_active_window['Derived Brand'] = df_active_window['SKU'].astype(str).str[:4].str.upper()
+
+total_spend = df_active_window['Spend'].sum()
+total_sales = df_active_window['Sales'].sum()
+global_acos = (total_spend / total_sales * 100) if total_sales > 0 else 0.0
+unique_brand_count = df_active_window['Derived Brand'].nunique()
+
+col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+with col_kpi1:
+    st.markdown(f"""<div class='kpi-card'>
+        <h4>Active Brands Tracked</h4>
+        <h2>{unique_brand_count}</h2>
+        <p>4-Letter SKU Prefixes</p>
+    </div>""", unsafe_allow_html=True)
+with col_kpi2:
+    st.markdown(f"""<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'>
+        <h4>Aggregate FBA Spend</h4>
+        <h2>${total_spend:,.2f}</h2>
+        <p>Current Active Window</p>
+    </div>""", unsafe_allow_html=True)
+with col_kpi3:
+    st.markdown(f"""<div class='kpi-card' style='border-top-color: #2ECC71;'>
+        <h4>Aggregate FBA Sales</h4>
+        <h2>${total_sales:,.2f}</h2>
+        <p>Search Traffic Revenue</p>
+    </div>""", unsafe_allow_html=True)
+with col_kpi4:
+    st.markdown(f"""<div class='kpi-card' style='border-top-color: {HEX_DARK_SLATE};'>
+        <h4>Global Target ACoS</h4>
+        <h2>{global_acos:.2f}%</h2>
+        <p>Blended Portfolio Efficiency</p>
+    </div>""", unsafe_allow_html=True)
+
+st.markdown("---")
 
 
 # ---------------------------------------------------------------------------------
@@ -250,6 +308,28 @@ with tabs[0]:
         file_name="Portfolio_WBR_Performance.xlsx",
         mime="application/vnd.ms-excel"
     )
+    
+    st.markdown("---")
+    st.markdown("### 🔍 Portfolio Pipeline Audit Logs")
+    
+    # Dynamic Expandable Inclusions Directory
+    with st.expander("👀 Click to Expand: Included FBA Portfolios & Campaigns"):
+        st.markdown("**The following active FBA portfolios and campaigns are built directly into your KPI calculations above:**")
+        audit_inc = df_included_auditing.groupby(['Mapped Portfolio', 'Portfolio Name'])['Campaign Name'].unique().reset_index()
+        for idx, row in audit_inc.iterrows():
+            st.markdown(f"**📂 Segment:** `{row['Mapped Portfolio']}` | **Portfolio:** `{row['Portfolio Name']}` *({len(row['Campaign Name'])} campaigns)*")
+            st.caption(", ".join(sorted(row['Campaign Name'])))
+            
+    # Dynamic Expandable Exclusions Directory
+    with st.expander("❌ Click to Expand: Excluded Portfolios & Campaigns (FBM / Vizari / Non-FBA)"):
+        st.markdown("**The following items failed the FBA validation engine criteria and were automatically omitted from the dashboard data matrix:**")
+        if not df_excluded_auditing.empty:
+            audit_exc = df_excluded_auditing.groupby('Portfolio Name')['Campaign Name'].unique().reset_index()
+            for idx, row in audit_exc.iterrows():
+                st.markdown(f"**🗑️ Removed Portfolio:** `{row['Portfolio Name']}` *({len(row['Campaign Name'])} campaigns)*")
+                st.caption(", ".join(sorted(row['Campaign Name'])))
+        else:
+            st.info("No records match standard exclusion criteria.")
 
 # ---------------------------------------------------------------------------------
 # TAB 2: VENDOR BRAND PREFIX ANNOTATION
