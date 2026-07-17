@@ -123,12 +123,20 @@ if 'SKU' not in df_raw.columns:
 
 
 # ---------------------------------------------------------------------------------
-# ⚙️ STRATEGIC PORTFOLIO ROUTING ENGINE
+# ⚙️ STRATEGIC PORTFOLIO ROUTING ENGINE (ADAPTED FOR FBM & VIZ EXCLUSIONS)
 # ---------------------------------------------------------------------------------
 def assign_wbr_portfolio(name):
     name_str = str(name).strip().lower()
-    if 'vizari' in name_str:
-        return 'EXCLUDE_VIZARI'
+    
+    # Exclude FBM entirely
+    if 'fbm' in name_str:
+        return 'EXCLUDE_FILTER'
+    
+    # Exclude anything containing VIZ or VIZARI (even if listed inside FBA name structures)
+    elif 'viz' in name_str or 'vizari' in name_str:
+        return 'EXCLUDE_FILTER'
+        
+    # Classify the remaining active FBA Portfolios
     elif 'map' in name_str:
         return 'map'
     elif 'ageing' in name_str:
@@ -140,8 +148,8 @@ def assign_wbr_portfolio(name):
 
 df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
 
-# Drop Vizari completely out of analysis
-df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_VIZARI']
+# Filter dataset: Drop excluded FBM, VIZ, and VIZARI portfolios completely
+df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
 
 
 # ---------------------------------------------------------------------------------
@@ -207,7 +215,7 @@ tabs = st.tabs(["📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Anal
 # ---------------------------------------------------------------------------------
 with tabs[0]:
     st.markdown("<span class='usecase-tag'>Designated Mapped Portfolios (FBA Optimized)</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Analyzes week-over-week efficiency patterns mapped against clean programmatic channel clusters. Vizari files are discarded from metrics automatically.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Analyzes week-over-week efficiency patterns mapped against clean programmatic channel clusters. All FBM, VIZ, and VIZARI portfolios are discarded automatically.</div>", unsafe_allow_html=True)
     
     # Portfolio Aggregations
     p1_port = df_p1.groupby('Mapped Portfolio').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
