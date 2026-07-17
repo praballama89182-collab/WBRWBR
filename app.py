@@ -86,7 +86,7 @@ for col in df_raw.columns:
     elif 'portfolio' in c_low:
         col_mapping[col] = 'Portfolio Name'
         
-    # 3. Main Advertised SKU mapping (exclude other SKU columns)
+    # 3. Main Advertised SKU mapping (exclude other auxiliary SKU columns)
     elif c_low == 'sku' or c_low == 'advertised sku':
         col_mapping[col] = 'SKU'
         
@@ -110,7 +110,6 @@ df_raw = df_raw.dropna(subset=['Date'])
 # Clean and transform numeric advertising inputs safely on unique Series
 for num_col in ['Spend', 'Sales']:
     if num_col in df_raw.columns:
-        # Check Series dtype safely
         if df_raw[num_col].dtype == object:
             df_raw[num_col] = df_raw[num_col].astype(str).str.replace(r'[%\$,]', '', regex=True)
         df_raw[num_col] = pd.to_numeric(df_raw[num_col], errors='coerce').fillna(0.0)
