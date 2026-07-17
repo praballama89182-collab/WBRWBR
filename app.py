@@ -1,324 +1,278 @@
-"""
-Amazon Sponsored Products — Campaign → Search Term Explorer
------------------------------------------------------------------
-Takes a raw Amazon Search Term report and lets you drill down:
-
-  Tab 1: Campaign → Search Terms
-      Each campaign is expandable; opening it shows every search term
-      that ran under it (aggregated across the selected date range),
-      with ACOS conditionally colored.
-
-  Tab 2: Campaign → Date → Search Terms
-      Each campaign is expandable; opening it shows a date picker, and
-      selecting a date shows every search term's performance on that
-      single day, with ACOS conditionally colored.
-
-Scope: only portfolios whose name contains "FBA" are considered,
-EXCLUDING any portfolio that also contains "Vizari".
-
-Run locally:
-    pip install -r requirements.txt
-    streamlit run app.py
-"""
-
+import streamlit as st
 import pandas as pd
 import numpy as np
-import streamlit as st
+import io
 
+# ---------------------------------------------------------------------------------
+# 🎨 EXECUTIVE ARCHITECTURE & STYLING
+# ---------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Campaign → Search Term Explorer",
-    page_icon="🔍",
+    page_title="MerchantSpring | Advertising WBR Engine",
+    page_icon="🦅",
     layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ----------------------------------------------------------------------
-# Visual theme — consistent with the rest of the tool suite
-# ----------------------------------------------------------------------
+# Colors matching the premium executive console
+HEX_DEEP_BLUE = "#1652A3"
+HEX_DARK_SLATE = "#3A414B"
+HEX_LIGHT_BLUE = "#D5DEE7"
 
-PALETTE = {
-    "blue": "#4285F4", "red": "#EA4335", "yellow": "#FBBC04",
-    "green": "#34A853", "purple": "#A142F4", "teal": "#24C1E0",
-}
-
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@500;700&display=swap');
-html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
-.stApp { background-color: #F8F9FA; }
-h1, h2, h3 { font-family: 'Roboto', sans-serif; font-weight: 500; color: #202124; }
-.kpi-card {
-    background: #FFFFFF; border-radius: 12px; padding: 14px 16px;
-    box-shadow: 0 1px 3px rgba(60,64,67,.15), 0 1px 2px rgba(60,64,67,.10);
-    border-top: 4px solid var(--accent, #4285F4); height: 100%;
-}
-.kpi-label { font-size: 11px; color: #5F6368; font-weight: 500; text-transform: uppercase; letter-spacing: .05em; }
-.kpi-value { font-family: 'Roboto Mono', monospace; font-size: 22px; font-weight: 700; color: #202124; margin-top: 3px; }
-button[data-baseweb="tab"] { font-weight: 600; font-size: 15px; }
-[data-baseweb="tab-highlight"] { background-color: #4285F4 !important; }
-</style>
+st.markdown(f"""
+    <style>
+    .main {{ background-color: #FBFBFC; }}
+    .kpi-title {{ font-size: 14px; color: #7f8c8d; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }}
+    .strategic-banner {{
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 6px solid {HEX_DEEP_BLUE};
+        margin-bottom: 25px;
+        box-shadow: 0 4px 12px rgba(58, 65, 75, 0.05);
+    }}
+    .usecase-tag {{
+        display: inline-block;
+        background-color: {HEX_LIGHT_BLUE};
+        color: {HEX_DARK_SLATE};
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        margin-bottom: 10px;
+    }}
+    </style>
 """, unsafe_allow_html=True)
 
-
-def kpi_card(label: str, value: str, color: str) -> str:
-    return (f'<div class="kpi-card" style="--accent:{color}">'
-            f'<div class="kpi-label">{label}</div><div class="kpi-value">{value}</div></div>')
-
-
-# ----------------------------------------------------------------------
-# Data loading
-# ----------------------------------------------------------------------
-
-RENAME_MAP = {
-    "7 Day Total Sales": "Sales",
-    "Total Advertising Cost of Sales (ACOS)": "ACOS_reported",
-    "Total Return on Advertising Spend (ROAS)": "ROAS_reported",
-    "7 Day Total Orders (#)": "Orders",
-    "7 Day Total Units (#)": "Units",
-    "Cost Per Click (CPC)": "CPC_reported",
-    "Click-Thru Rate (CTR)": "CTR_reported",
-    "7 Day Conversion Rate": "CVR_reported",
-}
-
-REQUIRED_COLS = [
-    "Date", "Portfolio name", "Campaign Name", "Customer Search Term",
-    "Match Type", "Impressions", "Clicks", "Spend", "Sales", "Orders",
-]
+st.title("🦅 Sponsored Products Weekly Business Review (WBR) Console")
+st.markdown("### Multi-Period Performance Matrix & Cross-Brand Delta Comparison Engine")
+st.markdown("---")
 
 
-@st.cache_data(show_spinner="Reading report…")
-def load_report(file) -> pd.DataFrame:
-    df = pd.read_excel(file, sheet_name=0)
-    df.columns = [c.strip() for c in df.columns]
-    df = df.rename(columns=RENAME_MAP)
-    missing = [c for c in REQUIRED_COLS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Report is missing expected columns: {missing}")
+# ---------------------------------------------------------------------------------
+# 📥 SIDEBAR CONTROL & DATAFRAME INGESTION
+# ---------------------------------------------------------------------------------
+st.sidebar.markdown(f"<h2 style='color: {HEX_DEEP_BLUE}; margin-top: 0;'>📥 Data Pipeline</h2>", unsafe_allow_html=True)
+uploaded_file = st.sidebar.file_uploader("Upload Sponsored Product Advertising Report", type=["csv", "xlsx"])
 
-    df["Date"] = pd.to_datetime(df["Date"])
-    df["Portfolio name"] = df["Portfolio name"].fillna("No Portfolio")
-    df["Customer Search Term"] = df["Customer Search Term"].fillna("").astype(str)
-    for col in ["Impressions", "Clicks", "Spend", "Sales", "Orders"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    return df
-
-
-def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    """Always recomputed from summed Spend/Sales/Clicks/Impressions — never
-    averaged from the report's own per-row ratio columns, which go blank on
-    zero-click/zero-sale rows and can't be validly averaged."""
-    out = df.copy()
-    out["CTR"] = np.where(out["Impressions"] > 0, out["Clicks"] / out["Impressions"], np.nan)
-    out["CVR"] = np.where(out["Clicks"] > 0, out["Orders"] / out["Clicks"], np.nan)
-    out["CPC"] = np.where(out["Clicks"] > 0, out["Spend"] / out["Clicks"], np.nan)
-    out["ACOS"] = np.where(out["Sales"] > 0, out["Spend"] / out["Sales"], np.nan)
-    out["ROAS"] = np.where(out["Spend"] > 0, out["Sales"] / out["Spend"], np.nan)
-    return out
-
-
-def aggregate(df: pd.DataFrame, group_cols: list) -> pd.DataFrame:
-    agg = (
-        df.groupby(group_cols, as_index=False)
-        .agg(Impressions=("Impressions", "sum"), Clicks=("Clicks", "sum"),
-             Spend=("Spend", "sum"), Sales=("Sales", "sum"), Orders=("Orders", "sum"))
-    )
-    return compute_metrics(agg)
-
-
-def format_term_table(agg_df: pd.DataFrame) -> pd.DataFrame:
-    disp = agg_df.copy()
-    disp["ACOS %"] = (disp["ACOS"] * 100).round(1)
-    disp["ROAS"] = disp["ROAS"].round(2)
-    disp["CTR %"] = (disp["CTR"] * 100).round(2)
-    disp["CVR %"] = (disp["CVR"] * 100).round(2)
-    disp["Spend"] = disp["Spend"].round(2)
-    disp["Sales"] = disp["Sales"].round(2)
-    return disp
-
-
-def acos_color(val, threshold_pct):
-    if pd.isna(val):
-        return "background-color:#fce8e6; color:#c5221f;"  # no sales at all — treat as red
-    elif val < threshold_pct:
-        return "background-color:#e6f4ea; color:#137333;"
-    else:
-        return "background-color:#fce8e6; color:#c5221f;"
-
-
-def render_term_table(disp: pd.DataFrame, cols: list, threshold_pct: float, height: int = 320):
-    styled = (
-        disp[cols]
-        .sort_values("Spend", ascending=False)
-        .style.map(lambda v: acos_color(v, threshold_pct), subset=["ACOS %"])
-        .format(precision=2)
-    )
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=height)
-
-
-# ----------------------------------------------------------------------
-# Sidebar
-# ----------------------------------------------------------------------
-
-st.sidebar.title("🔍 Search Term Explorer")
-uploaded = st.sidebar.file_uploader("Upload raw Search Term report (.xlsx)", type=["xlsx"])
-
-if uploaded is None:
-    st.title("Campaign → Search Term Explorer")
-    st.info("👈 Upload a raw Amazon Sponsored Products Search Term report (.xlsx) to begin. "
-            "Expected columns include Date, Portfolio name, Campaign Name, Customer Search Term, "
-            "Match Type, Impressions, Clicks, Spend, 7 Day Total Sales, 7 Day Total Orders.")
+if not uploaded_file:
+    st.info("👋 **Console Parked:** Please upload an advertising performance report (CSV/XLSX) to initialize the WBR matrix data model.")
     st.stop()
 
+# Load file dynamically based on file format
 try:
-    raw = load_report(uploaded)
-except Exception as e:
-    st.error(f"Couldn't read this file: {e}")
-    st.stop()
-
-st.sidebar.markdown("---")
-fba_only = st.sidebar.checkbox(
-    "Only FBA portfolios (excludes Vizari)", value=True,
-    help="Keeps any portfolio whose name contains 'FBA', but always excludes portfolios "
-         "containing 'Vizari' even if they also happen to contain 'FBA'."
-)
-is_fba = raw["Portfolio name"].str.contains("FBA", case=False, na=False)
-is_vizari = raw["Portfolio name"].str.contains("Vizari", case=False, na=False)
-scope_mask = (is_fba & ~is_vizari) if fba_only else pd.Series(True, index=raw.index)
-raw_scoped = raw[scope_mask]
-
-if fba_only:
-    st.sidebar.caption(f"Scoped to {raw_scoped['Portfolio name'].nunique()} FBA portfolios, "
-                        f"{raw_scoped['Campaign Name'].nunique()} campaigns.")
-
-if raw_scoped.empty:
-    st.error("No rows match an 'FBA' portfolio name (excluding Vizari) in this file. "
-              "Uncheck the filter to see all data.")
-    st.stop()
-
-min_date, max_date = raw_scoped["Date"].min().date(), raw_scoped["Date"].max().date()
-date_range = st.sidebar.date_input("Date range", (min_date, max_date), min_value=min_date, max_value=max_date)
-if isinstance(date_range, tuple) and len(date_range) == 2:
-    start_date, end_date = date_range
-else:
-    start_date, end_date = min_date, max_date
-
-portfolios = sorted(raw_scoped["Portfolio name"].dropna().unique())
-selected_portfolios = st.sidebar.multiselect("Portfolio", portfolios, default=[])
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Campaign search")
-campaign_query = st.sidebar.text_input("Campaign name")
-match_mode = st.sidebar.radio("Match mode", ["Contains", "Starts with"], horizontal=True)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Display settings")
-acos_threshold = st.sidebar.number_input("ACOS highlight threshold (%)", min_value=0.0, value=5.0, step=1.0,
-                                          help="Below this = light green. At/above this (or no sales) = light red.")
-sort_campaigns_by = st.sidebar.selectbox("Sort campaigns by", ["Spend", "Sales", "Clicks", "Campaign Name"])
-max_campaigns = st.sidebar.slider("Max campaigns to display", min_value=5, max_value=200, value=30, step=5,
-                                   help="Keeps the page responsive — narrow with the search box above to see more.")
-
-# ----------------------------------------------------------------------
-# Filter
-# ----------------------------------------------------------------------
-
-df = raw_scoped[(raw_scoped["Date"].dt.date >= start_date) & (raw_scoped["Date"].dt.date <= end_date)].copy()
-if selected_portfolios:
-    df = df[df["Portfolio name"].isin(selected_portfolios)]
-if campaign_query:
-    if match_mode == "Contains":
-        df = df[df["Campaign Name"].str.contains(campaign_query, case=False, na=False)]
+    if uploaded_file.name.endswith('.csv'):
+        df_raw = pd.read_csv(uploaded_file)
     else:
-        df = df[df["Campaign Name"].str.lower().str.startswith(campaign_query.lower())]
-
-if df.empty:
-    st.warning("No rows match the current filters.")
+        df_raw = pd.read_excel(uploaded_file)
+except Exception as e:
+    st.error(f"Error parsing file: {e}. Please ensure it is a clean marketplace export.")
     st.stop()
 
-st.title("Campaign → Search Term Explorer")
-scope_label = "FBA portfolios only (excl. Vizari)" if fba_only else "all portfolios"
-st.caption(f"{df['Campaign Name'].nunique()} campaigns match · {scope_label} · "
-           f"{start_date} → {end_date} · {len(df):,} rows")
+# Standardize and map column headers to prevent text match deviations
+df_raw.columns = df_raw.columns.str.strip()
 
-# campaign ranking / limiting
-camp_totals = aggregate(df, ["Campaign Name"])
-if sort_campaigns_by == "Campaign Name":
-    camp_order = camp_totals.sort_values("Campaign Name")["Campaign Name"].tolist()
-else:
-    camp_order = camp_totals.sort_values(sort_campaigns_by, ascending=False)["Campaign Name"].tolist()
-shown_campaigns = camp_order[:max_campaigns]
+col_mapping = {}
+for col in df_raw.columns:
+    c_low = col.lower()
+    if 'date' in c_low: col_mapping[col] = 'Date'
+    elif 'portfolio' in c_low: col_mapping[col] = 'Portfolio Name'
+    elif 'sku' in c_low or 'advertised sku' in c_low: col_mapping[col] = 'SKU'
+    elif 'spend' in c_low: col_mapping[col] = 'Spend'
+    elif 'sales' in c_low: col_mapping[col] = 'Sales'
 
-if len(camp_order) > max_campaigns:
-    st.info(f"Showing the top {max_campaigns} of {len(camp_order)} matching campaigns "
-             f"(sorted by {sort_campaigns_by}). Narrow the campaign search or raise the limit in the sidebar to see more.")
+df_raw = df_raw.rename(columns=col_mapping)
 
-camp_groups = df.groupby("Campaign Name")
+if 'Date' not in df_raw.columns:
+    st.error("Missing a valid 'Date' column in the uploaded report format.")
+    st.stop()
 
-tab_by_term, tab_by_date = st.tabs(["📋 Campaign → Search Terms", "📅 Campaign → Date → Search Terms"])
+df_raw['Date'] = pd.to_datetime(df_raw['Date'], errors='coerce')
+df_raw = df_raw.dropna(subset=['Date'])
 
-TERM_COLS = ["Customer Search Term", "Match Type", "Impressions", "Clicks",
-             "Spend", "Sales", "Orders", "ACOS %", "ROAS", "CVR %", "CTR %"]
+# Clean and transform numeric advertising inputs
+for num_col in ['Spend', 'Sales']:
+    if num_col in df_raw.columns:
+        if df_raw[num_col].dtype == object:
+            df_raw[num_col] = df_raw[num_col].astype(str).str.replace(r'[%\$,]', '', regex=True)
+        df_raw[num_col] = pd.to_numeric(df_raw[num_col], errors='coerce').fillna(0.0)
+    else:
+        df_raw[num_col] = 0.0
 
-# ----------------------------------------------------------------------
-# Tab 1: Campaign → Search Terms
-# ----------------------------------------------------------------------
+if 'Portfolio Name' not in df_raw.columns:
+    df_raw['Portfolio Name'] = 'General Portfolio'
+if 'SKU' not in df_raw.columns:
+    df_raw['SKU'] = 'GEN-UNKNOWN'
 
-with tab_by_term:
-    st.caption(f"ACOS below {acos_threshold:.0f}% is highlighted light green; at/above (or no sales) is light red.")
-    for camp in shown_campaigns:
-        g = camp_groups.get_group(camp)
-        totals = aggregate(g, ["Campaign Name"]).iloc[0]
-        label = (f"{camp}  ·  ${totals['Spend']:,.0f} spend  ·  "
-                 f"{totals['ACOS']*100:.1f}% ACOS" if pd.notna(totals['ACOS']) else
-                 f"{camp}  ·  ${totals['Spend']:,.0f} spend  ·  no sales")
-        with st.expander(label):
-            kpi_cols = st.columns(4)
-            kpis = [
-                ("Spend", f"${totals['Spend']:,.0f}", PALETTE["red"]),
-                ("Sales", f"${totals['Sales']:,.0f}", PALETTE["green"]),
-                ("ACOS", f"{totals['ACOS']*100:.1f}%" if pd.notna(totals['ACOS']) else "—", PALETTE["yellow"]),
-                ("ROAS", f"{totals['ROAS']:.2f}" if pd.notna(totals['ROAS']) else "—", PALETTE["purple"]),
-            ]
-            for col, (lbl, val, color) in zip(kpi_cols, kpis):
-                with col:
-                    st.markdown(kpi_card(lbl, val, color), unsafe_allow_html=True)
 
-            term_agg = aggregate(g, ["Customer Search Term", "Match Type"])
-            disp = format_term_table(term_agg)
-            st.markdown(f"**{len(disp)} search term(s)**")
-            render_term_table(disp, TERM_COLS, acos_threshold)
+# ---------------------------------------------------------------------------------
+# ⚙️ ADVANCED STRATEGIC PORTFOLIO ROUTING ENGINE
+# ---------------------------------------------------------------------------------
+def assign_wbr_portfolio(name):
+    name_str = str(name).strip().lower()
+    if 'vizari' in name_str:
+        return 'EXCLUDE_VIZARI'
+    elif 'map' in name_str:
+        return 'map'
+    elif 'ageing' in name_str:
+        return 'ageing'
+    elif 'exclusive' in name_str:
+        return 'exclusive'
+    else:
+        return 'fba'
 
-# ----------------------------------------------------------------------
-# Tab 2: Campaign → Date → Search Terms
-# ----------------------------------------------------------------------
+df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
 
-with tab_by_date:
-    st.caption(f"Expand a campaign, then pick a date to see that day's search term performance. "
-               f"ACOS below {acos_threshold:.0f}% is light green; at/above (or no sales) is light red.")
-    for camp in shown_campaigns:
-        g = camp_groups.get_group(camp)
-        totals = aggregate(g, ["Campaign Name"]).iloc[0]
-        label = f"{camp}  ·  ${totals['Spend']:,.0f} spend"
-        with st.expander(label):
-            available_dates = sorted(g["Date"].dt.date.unique(), reverse=True)
-            selected_date = st.selectbox(
-                "Date", available_dates, key=f"date_{camp}",
-                format_func=lambda d: d.strftime("%Y-%m-%d"),
-            )
-            day_df = g[g["Date"].dt.date == selected_date]
-            day_totals = aggregate(day_df, ["Campaign Name"]).iloc[0]
+# Drop Vizari completely out of analysis
+df_raw = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_VIZARI']
 
-            kpi_cols = st.columns(4)
-            kpis = [
-                ("Spend", f"${day_totals['Spend']:,.0f}", PALETTE["red"]),
-                ("Sales", f"${day_totals['Sales']:,.0f}", PALETTE["green"]),
-                ("ACOS", f"{day_totals['ACOS']*100:.1f}%" if pd.notna(day_totals['ACOS']) else "—", PALETTE["yellow"]),
-                ("ROAS", f"{day_totals['ROAS']:.2f}" if pd.notna(day_totals['ROAS']) else "—", PALETTE["purple"]),
-            ]
-            for col, (lbl, val, color) in zip(kpi_cols, kpis):
-                with col:
-                    st.markdown(kpi_card(lbl, val, color), unsafe_allow_html=True)
 
-            term_agg = aggregate(day_df, ["Customer Search Term", "Match Type"])
-            disp = format_term_table(term_agg)
-            st.markdown(f"**{len(disp)} search term(s) on {selected_date}**")
-            render_term_table(disp, TERM_COLS, acos_threshold)
+# ---------------------------------------------------------------------------------
+# 📅 TWO-PERIOD DATE SELECTION FUNNEL
+# ---------------------------------------------------------------------------------
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📅 Period 1 Scope (Previous Week)")
+p1_start = st.sidebar.date_input("P1 Start Date", df_raw['Date'].min())
+p1_end = st.sidebar.date_input("P1 End Date", df_raw['Date'].max() - pd.Timedelta(days=7))
+
+st.sidebar.markdown("### 📅 Period 2 Scope (This Week)")
+p2_start = st.sidebar.date_input("P2 Start Date", df_raw['Date'].max() - pd.Timedelta(days=6))
+p2_end = st.sidebar.date_input("P2 End Date", df_raw['Date'].max())
+
+# Isolate periods
+df_p1 = df_raw[(df_raw['Date'] >= pd.Timestamp(p1_start)) & (df_raw['Date'] <= pd.Timestamp(p1_end))]
+df_p2 = df_raw[(df_raw['Date'] >= pd.Timestamp(p2_start)) & (df_raw['Date'] <= pd.Timestamp(p2_end))]
+
+
+# ---------------------------------------------------------------------------------
+# 📊 CONTEXTUAL COLOR CONDITIONAL FORMATTING GENERATOR
+# ---------------------------------------------------------------------------------
+def style_comparison_matrix(df):
+    """Applies clean operational cell highlighting to instantly surface performance deltas."""
+    style_df = pd.DataFrame('', index=df.index, columns=df.columns)
+    
+    # 🔴 Red Blend: #FADBD8 | 🟢 Green Blend: #D4EFDF
+    for idx in df.index:
+        # Spend Logic: Higher spend is light red (cost leak), lower spend is light green
+        if df.loc[idx, 'Spend (Prev)'] > df.loc[idx, 'Spend (This Wk)']:
+            style_df.loc[idx, 'Spend (Prev)'] = 'background-color: #FADBD8'
+            style_df.loc[idx, 'Spend (This Wk)'] = 'background-color: #D4EFDF'
+        elif df.loc[idx, 'Spend (Prev)'] < df.loc[idx, 'Spend (This Wk)']:
+            style_df.loc[idx, 'Spend (Prev)'] = 'background-color: #D4EFDF'
+            style_df.loc[idx, 'Spend (This Wk)'] = 'background-color: #FADBD8'
+            
+        # Sales Logic: Higher sales is green (growth traction), lower sales is red
+        if df.loc[idx, 'Sales (Prev)'] > df.loc[idx, 'Sales (This Wk)']:
+            style_df.loc[idx, 'Sales (Prev)'] = 'background-color: #D4EFDF'
+            style_df.loc[idx, 'Sales (This Wk)'] = 'background-color: #FADBD8'
+        elif df.loc[idx, 'Sales (Prev)'] < df.loc[idx, 'Sales (This Wk)']:
+            style_df.loc[idx, 'Sales (Prev)'] = 'background-color: #FADBD8'
+            style_df.loc[idx, 'Sales (This Wk)'] = 'background-color: #D4EFDF'
+            
+        # ACoS Logic: Lower ACoS is green (increased efficiency), higher ACoS is red
+        if df.loc[idx, 'ACoS % (Prev)'] > df.loc[idx, 'ACoS % (This Wk)']:
+            style_df.loc[idx, 'ACoS % (Prev)'] = 'background-color: #FADBD8'
+            style_df.loc[idx, 'ACoS % (This Wk)'] = 'background-color: #D4EFDF'
+        elif df.loc[idx, 'ACoS % (Prev)'] < df.loc[idx, 'ACoS % (This Wk)']:
+            style_df.loc[idx, 'ACoS % (Prev)'] = 'background-color: #D4EFDF'
+            style_df.loc[idx, 'ACoS % (This Wk)'] = 'background-color: #FADBD8'
+            
+    return style_df
+
+
+# ---------------------------------------------------------------------------------
+# 💎 VISUAL USER INTERFACE PRODUCTION
+# ---------------------------------------------------------------------------------
+tabs = st.tabs(["📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Analytics"])
+
+# ---------------------------------------------------------------------------------
+# TAB 1: STRATEGIC PORTFOLIO COMPARISON
+# ---------------------------------------------------------------------------------
+with tabs[0]:
+    st.markdown("<span class='usecase-tag'>Designated Mapped Portfolios (FBA Optimized)</span>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Analyzes week-over-week efficiency patterns mapped against clean programmatic channel clusters. Vizari files are discarded from metrics automatically.</div>", unsafe_allow_html=True)
+    
+    # Portfolio Aggregations
+    p1_port = df_p1.groupby('Mapped Portfolio').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
+    p2_port = df_p2.groupby('Mapped Portfolio').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
+    
+    merged_port = pd.merge(p1_port, p2_port, on='Mapped Portfolio', how='outer', suffixes=(' (Prev)', ' (This Wk)')).fillna(0.0)
+    
+    merged_port['ACoS % (Prev)'] = np.where(merged_port['Sales (Prev)'] > 0, (merged_port['Spend (Prev)'] / merged_port['Sales (Prev)']) * 100, 0.0)
+    merged_port['ACoS % (This Wk)'] = np.where(merged_port['Sales (This Wk)'] > 0, (merged_port['Spend (This Wk)'] / merged_port['Sales (This Wk)']) * 100, 0.0)
+    
+    # Column mapping structural adjustments
+    order_cols = ['Mapped Portfolio', 'Spend (Prev)', 'Spend (This Wk)', 'Sales (Prev)', 'Sales (This Wk)', 'ACoS % (Prev)', 'ACoS % (This Wk)']
+    final_port = merged_port.reindex(columns=order_cols).fillna(0.0)
+    final_port = final_port.rename(columns={'Mapped Portfolio': 'Portfolio Segment'})
+    
+    st.dataframe(
+        final_port.style.apply(style_comparison_matrix, axis=None).format({
+            'Spend (Prev)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
+            'Sales (Prev)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
+            'ACoS % (Prev)': '{:.2f}%', 'ACoS % (This Wk)': '{:.2f}%'
+        }),
+        use_container_width=True
+    )
+    
+    # Target Export
+    towrite = io.BytesIO()
+    with pd.ExcelWriter(towrite, engine='xlsxwriter') as writer:
+        final_port.to_excel(writer, sheet_name='Portfolio WBR', index=False)
+    st.download_button(
+        label="📥 Export Mapped Portfolio Sheet to Excel",
+        data=towrite.getvalue(),
+        file_name="Portfolio_WBR_Performance.xlsx",
+        mime="application/vnd.ms-excel"
+    )
+
+# ---------------------------------------------------------------------------------
+# TAB 2: VENDOR BRAND PREFIX ANNOTATION
+# ---------------------------------------------------------------------------------
+with tabs[1]:
+    st.markdown("<span class='usecase-tag'>Top 20 Brand Prefix SKU Matrix</span>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Programmatically extracts the leading 4 characters from data SKUs to classify sub-brands. Filtered aggressively for the <b>Top 20 high-revenue lines</b> this week.</div>", unsafe_allow_html=True)
+    
+    # Safe isolation mapping
+    df_p1 = df_p1.copy()
+    df_p2 = df_p2.copy()
+    df_p1['Brand Prefix'] = df_p1['SKU'].astype(str).str[:4].str.upper()
+    df_p2['Brand Prefix'] = df_p2['SKU'].astype(str).str[:4].str.upper()
+    
+    p1_brand = df_p1.groupby('Brand Prefix').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
+    p2_brand = df_p2.groupby('Brand Prefix').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
+    
+    merged_brand = pd.merge(p1_brand, p2_brand, on='Brand Prefix', how='outer', suffixes=(' (Prev)', ' (This Wk)')).fillna(0.0)
+    
+    merged_brand['ACoS % (Prev)'] = np.where(merged_brand['Sales (Prev)'] > 0, (merged_brand['Spend (Prev)'] / merged_brand['Sales (Prev)']) * 100, 0.0)
+    merged_brand['ACoS % (This Wk)'] = np.where(merged_brand['Sales (This Wk)'] > 0, (merged_brand['Spend (This Wk)'] / merged_brand['Sales (This Wk)']) * 100, 0.0)
+    
+    # Retain strictly top 20 lines by current week revenue metrics
+    top_20_brands = merged_brand.sort_values(by='Sales (This Wk)', ascending=False).head(20).reset_index(drop=True)
+    
+    brand_order_cols = ['Brand Prefix', 'Spend (Prev)', 'Spend (This Wk)', 'Sales (Prev)', 'Sales (This Wk)', 'ACoS % (Prev)', 'ACoS % (This Wk)']
+    final_brand = top_20_brands.reindex(columns=brand_order_cols).fillna(0.0)
+    
+    if not final_brand.empty:
+        st.dataframe(
+            final_brand.style.apply(style_comparison_matrix, axis=None).format({
+                'Spend (Prev)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
+                'Sales (Prev)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
+                'ACoS % (Prev)': '{:.2f}%', 'ACoS % (This Wk)': '{:.2f}%'
+            }),
+            use_container_width=True
+        )
+        
+        # Dual Tab Master Consolidated Exporter Engine
+        master_buffer = io.BytesIO()
+        with pd.ExcelWriter(master_buffer, engine='xlsxwriter') as writer:
+            final_port.to_excel(writer, sheet_name='Portfolio Performance WBR', index=False)
+            final_brand.to_excel(writer, sheet_name='Vendor SKU WBR', index=False)
+            
+        st.download_button(
+            label="📥 Export Complete Two-Tab Master WBR Report to Excel",
+            data=master_buffer.getvalue(),
+            file_name="Master_WBR_Comparison_Unified.xlsx",
+            mime="application/vnd.ms-excel"
+        )
+    else:
+        st.warning("No vendor records match current date range filters.")
