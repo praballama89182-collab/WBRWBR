@@ -4,19 +4,19 @@ import numpy as np
 import io
 
 # ---------------------------------------------------------------------------------
-# 🎨 EXECUTIVE ARCHITECTURE & STYLING
+# 🎨 EXECUTIVE ARCHITECTURE & GLOBAL PALETTE SETUP
 # ---------------------------------------------------------------------------------
+HEX_DEEP_BLUE = "#1652A3"
+HEX_DARK_SLATE = "#3A414B"
+HEX_LIGHT_BLUE = "#D5DEE7"
+HEX_VIBRANT_BLUE = "#2F88F5"
+
 st.set_page_config(
     page_title="MerchantSpring | Advertising WBR Engine",
     page_icon="🦅",
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# Colors matching the premium executive console
-HEX_DEEP_BLUE = "#1652A3"
-HEX_DARK_SLATE = "#3A414B"
-HEX_LIGHT_BLUE = "#D5DEE7"
 
 st.markdown(f"""
     <style>
@@ -29,9 +29,9 @@ st.markdown(f"""
         border-top: 5px solid {HEX_DEEP_BLUE};
         text-align: center;
     }}
-    .kpi-card h4 {{ margin: 0 0 6px 0; color: #7f8c8d; font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px; }}
-    .kpi-card h2 {{ margin: 0; color: {HEX_DARK_SLATE}; font-size: 28px; font-weight: 800; }}
-    .kpi-card p {{ margin: 4px 0 0 0; font-size: 13px; font-weight: 600; color: #566573; }}
+    .kpi-card h4 {{ margin: 0 0 6px 0; color: #7f8c8d; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; }}
+    .kpi-card h2 {{ margin: 0; color: {HEX_DARK_SLATE}; font-size: 24px; font-weight: 800; }}
+    .kpi-card p {{ margin: 4px 0 0 0; font-size: 12px; font-weight: 600; color: #566573; }}
     .strategic-banner {{
         background-color: #ffffff;
         padding: 20px;
@@ -96,17 +96,23 @@ for col in df_raw.columns:
     elif 'portfolio' in c_low:
         col_mapping[col] = 'Portfolio Name'
         
-    # 3. Main Advertised SKU mapping (exclude other auxiliary SKU columns)
+    # 3. Main Advertised SKU mapping
     elif c_low == 'sku' or c_low == 'advertised sku':
         col_mapping[col] = 'SKU'
         
-    # 4. Strict Ad Spend column mapping (exclude ACOS/ROAS checks)
+    # 4. Strict Ad Spend column mapping
     elif c_low == 'spend' and not any(x in c_low for x in ['acos', 'roas']):
         col_mapping[col] = 'Spend'
         
-    # 5. Strict Total Sales mapping (exclude ACOS, ROAS, SKU-level units/sales, other sales)
+    # 5. Strict Total Sales mapping
     elif ('sales' in c_low or 'revenue' in c_low) and not any(x in c_low for x in ['acos', 'roas', 'sku', 'other']):
         col_mapping[col] = 'Sales'
+        
+    # 6. Click & Impression Funnel mapping for summary calculations
+    elif c_low == 'clicks':
+        col_mapping[col] = 'Clicks'
+    elif c_low == 'impressions':
+        col_mapping[col] = 'Impressions'
 
 df_raw = df_raw.rename(columns=col_mapping)
 
@@ -118,7 +124,7 @@ df_raw['Date'] = pd.to_datetime(df_raw['Date'], errors='coerce')
 df_raw = df_raw.dropna(subset=['Date'])
 
 # Clean and transform numeric advertising inputs safely on unique Series
-for num_col in ['Spend', 'Sales']:
+for num_col in ['Spend', 'Sales', 'Clicks', 'Impressions']:
     if num_col in df_raw.columns:
         if df_raw[num_col].dtype == object:
             df_raw[num_col] = df_raw[num_col].astype(str).str.replace(r'[%\$,]', '', regex=True)
@@ -186,42 +192,53 @@ df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_proc
 
 
 # ---------------------------------------------------------------------------------
-# 👑 EXECUTIVE DYNAMIC BRAND OVERVIEW RIBBON (FIX FOR EMPTY OVERVIEW)
+# 👑 EXECUTIVE SUMMARY RIBBON: BLENDED FBA PERFORMANCE MATRIX
 # ---------------------------------------------------------------------------------
 df_active_window = df_p2 if not df_p2.empty else df_processed
-
 df_active_window = df_active_window.copy()
 df_active_window['Derived Brand'] = df_active_window['SKU'].astype(str).str[:4].str.upper()
 
-total_spend = df_active_window['Spend'].sum()
-total_sales = df_active_window['Sales'].sum()
-global_acos = (total_spend / total_sales * 100) if total_sales > 0 else 0.0
-unique_brand_count = df_active_window['Derived Brand'].nunique()
+# Compute aggregates for active FBA pipeline
+tot_spend = df_active_window['Spend'].sum()
+tot_sales = df_active_window['Sales'].sum()
+tot_clicks = df_active_window['Clicks'].sum()
+tot_impr = df_active_window['Impressions'].sum()
 
-col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+global_acos = (tot_spend / tot_sales * 100) if tot_sales > 0 else 0.0
+global_ctr = (tot_clicks / tot_impr * 100) if tot_impr > 0 else 0.0
+global_cpc = (tot_spend / tot_clicks) if tot_clicks > 0 else 0.0
+unique_brands = df_active_window['Derived Brand'].nunique()
+
+col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
 with col_kpi1:
     st.markdown(f"""<div class='kpi-card'>
-        <h4>Active Brands Tracked</h4>
-        <h2>{unique_brand_count}</h2>
-        <p>4-Letter SKU Prefixes</p>
+        <h4>Active Brands</h4>
+        <h2>{unique_brands}</h2>
+        <p>FBA SKU Prefixes</p>
     </div>""", unsafe_allow_html=True)
 with col_kpi2:
     st.markdown(f"""<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'>
-        <h4>Aggregate FBA Spend</h4>
-        <h2>${total_spend:,.2f}</h2>
-        <p>Current Active Window</p>
+        <h4>FBA Budget Spend</h4>
+        <h2>${tot_spend:,.2f}</h2>
+        <p>Blended Total Spend</p>
     </div>""", unsafe_allow_html=True)
 with col_kpi3:
     st.markdown(f"""<div class='kpi-card' style='border-top-color: #2ECC71;'>
-        <h4>Aggregate FBA Sales</h4>
-        <h2>${total_sales:,.2f}</h2>
-        <p>Search Traffic Revenue</p>
+        <h4>FBA Total Sales</h4>
+        <h2>${tot_sales:,.2f}</h2>
+        <p>Total Revenue Captured</p>
     </div>""", unsafe_allow_html=True)
 with col_kpi4:
-    st.markdown(f"""<div class='kpi-card' style='border-top-color: {HEX_DARK_SLATE};'>
-        <h4>Global Target ACoS</h4>
+    st.markdown(f"""<div class='kpi-card' style='border-top-color: #E67E22;'>
+        <h4>Blended ACoS</h4>
         <h2>{global_acos:.2f}%</h2>
-        <p>Blended Portfolio Efficiency</p>
+        <p>Total Spend / Total Sales</p>
+    </div>""", unsafe_allow_html=True)
+with col_kpi5:
+    st.markdown(f"""<div class='kpi-card' style='border-top-color: {HEX_DARK_SLATE};'>
+        <h4>Blended Funnel</h4>
+        <h2>CTR: {global_ctr:.2f}%</h2>
+        <p>CPC Median: ${global_cpc:.2f}</p>
     </div>""", unsafe_allow_html=True)
 
 st.markdown("---")
@@ -234,7 +251,6 @@ def style_comparison_matrix(df):
     """Applies clean operational cell highlighting to instantly surface performance deltas."""
     style_df = pd.DataFrame('', index=df.index, columns=df.columns)
     
-    # 🔴 Red Blend: #FADBD8 | 🟢 Green Blend: #D4EFDF
     for idx in df.index:
         # Spend Logic: Higher spend is light red (cost leak), lower spend is light green
         if df.loc[idx, 'Spend (Prev)'] > df.loc[idx, 'Spend (This Wk)']:
@@ -273,7 +289,7 @@ tabs = st.tabs(["📊 Portfolio Comparison Engine", "🏭 Vendor SKU Prefix Anal
 # ---------------------------------------------------------------------------------
 with tabs[0]:
     st.markdown("<span class='usecase-tag'>Strict FBA Mapped Portfolios (Non-Vizari)</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Week-over-week efficiency metrics for portfolios containing <b>FBA</b>. Portfolios containing <b>VIZ / VIZARI</b> or non-FBA items are entirely excluded.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Strategic Portfolio Analytics:</b> Week-over-week efficiency metrics for portfolios containing <b>FBA</b>. Portfolios containing <b>VIZ / VIZARI</b> or non-FBA items are entirely excluded. Click column headers to sort values from lowest to highest.</div>", unsafe_allow_html=True)
     
     # Portfolio Aggregations
     p1_port = df_p1.groupby('Mapped Portfolio').agg({'Spend':'sum', 'Sales':'sum'}).reset_index()
@@ -336,7 +352,7 @@ with tabs[0]:
 # ---------------------------------------------------------------------------------
 with tabs[1]:
     st.markdown("<span class='usecase-tag'>Top 20 Brand Prefix SKU Matrix</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Extracts the leading 4 characters from product SKUs across the active FBA inventory pipeline. Limited to the <b>Top 20 high-revenue lines</b> this week.</div>", unsafe_allow_html=True)
+    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Extracts the leading 4 characters from product SKUs across the active FBA inventory pipeline. Limited to the <b>Top 20 high-revenue lines</b> this week. Click column headers to sort values from lowest to highest.</div>", unsafe_allow_html=True)
     
     # Safe isolation mapping
     df_p1 = df_p1.copy()
