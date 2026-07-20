@@ -215,13 +215,54 @@ if df_processed.empty:
 # ---------------------------------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 📅 Live Window Control")
-p1_start = st.sidebar.date_input("P1 Start Date", df_processed['Date'].min())
-p1_end = st.sidebar.date_input("P1 End Date", df_processed['Date'].max() - pd.Timedelta(days=7))
-p2_start = st.sidebar.date_input("P2 Start Date", df_processed['Date'].max() - pd.Timedelta(days=6))
-p2_end = st.sidebar.date_input("P2 End Date", df_processed['Date'].max())
+
+# The original defaults hardcoded "last 7 days = P2, the 7 days before that = P1",
+# which silently produces an INVALID range (P1 start after P1 end -> zero rows ->
+# every "(Prev)"/"(Last Wk)" metric shows $0) whenever the uploaded file spans
+# less than 14 days -- a very common case for a fresh weekly export. This now
+# scales the split to whatever date range is actually present in the file.
+data_min = df_processed['Date'].min()
+data_max = df_processed['Date'].max()
+total_days = (data_max - data_min).days + 1
+
+if total_days >= 14:
+    default_p2_start = data_max - pd.Timedelta(days=6)
+    default_p2_end = data_max
+    default_p1_start = data_min
+    default_p1_end = default_p2_start - pd.Timedelta(days=1)
+elif total_days >= 2:
+    half = max(1, total_days // 2)
+    default_p2_end = data_max
+    default_p2_start = data_max - pd.Timedelta(days=half - 1)
+    default_p1_end = default_p2_start - pd.Timedelta(days=1)
+    default_p1_start = data_min
+    st.sidebar.caption(
+        f"File spans only {total_days} day(s), so P1/P2 default to a half-and-half "
+        f"split instead of full weeks. Adjust the date pickers for a custom comparison."
+    )
+else:
+    # Only a single day of data in the whole file -- mirror both periods rather
+    # than producing an empty/invalid range.
+    default_p1_start = default_p1_end = default_p2_start = default_p2_end = data_max
+    st.sidebar.caption("File spans only 1 day, so P1 and P2 both show that same day.")
+
+p1_start = st.sidebar.date_input("P1 Start Date", default_p1_start)
+p1_end = st.sidebar.date_input("P1 End Date", default_p1_end)
+p2_start = st.sidebar.date_input("P2 Start Date", default_p2_start)
+p2_end = st.sidebar.date_input("P2 End Date", default_p2_end)
+
+if p1_start > p1_end:
+    st.sidebar.error("P1 Start Date is after P1 End Date — P1 metrics will show as zero until this is fixed.")
+if p2_start > p2_end:
+    st.sidebar.error("P2 Start Date is after P2 End Date — P2 metrics will show as zero until this is fixed.")
 
 df_p1 = df_processed[(df_processed['Date'] >= pd.Timestamp(p1_start)) & (df_processed['Date'] <= pd.Timestamp(p1_end))].copy()
 df_p2 = df_processed[(df_processed['Date'] >= pd.Timestamp(p2_start)) & (df_processed['Date'] <= pd.Timestamp(p2_end))].copy()
+
+if df_p1.empty:
+    st.sidebar.warning("No rows fall inside the P1 date range — all '(Prev)'/'(Last Wk)' columns will show $0.")
+if df_p2.empty:
+    st.sidebar.warning("No rows fall inside the P2 date range — all 'This Wk' metrics and the KPI cards will show $0.")
 
 # Rigidly force localization of the 4-letter brand identifier key to protect slices
 df_p1['Brand Prefix'] = df_p1['SKU'].astype(str).str[:4].str.upper()
