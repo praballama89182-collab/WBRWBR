@@ -89,26 +89,66 @@ except Exception as e:
 
 df_raw.columns = df_raw.columns.str.strip()
 
-# Map Ad report headers cleanly
+# --- Layer 1: de-duplicate raw column labels BEFORE any mapping happens.
+# pandas allows a DataFrame to have two columns with the identical label. If that
+# happens, df_raw[c] on that label returns a DataFrame (not a Series) and anything
+# downstream expecting Series behavior (e.g. .dtype) throws an AttributeError. This
+# can happen even from the source file itself (merged headers, blank/repeated
+# columns in an export), independent of our own renaming below.
+if df_raw.columns.duplicated().any():
+    dup_names = sorted(set(df_raw.columns[df_raw.columns.duplicated()].tolist()))
+    st.sidebar.warning(
+        f"⚠️ The uploaded file has duplicate column names — keeping only the first "
+        f"occurrence of each: {', '.join(dup_names)}"
+    )
+    df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
+
+# --- Layer 2: claim-based column mapping. Amazon's report headers drift over time
+# and across export paths, so the matching rules below are intentionally loose
+# (substring matches like 'sales' in c_low). But a loose rule can match MORE THAN
+# ONE source column (e.g. both "7 Day Total Sales" and "Ordered Product Sales"
+# contain "sales"). Renaming both to "Sales" would recreate the exact duplicate-
+# column problem Layer 1 just solved. So each canonical target name may only be
+# claimed once, by the first matching source column — anything that would also
+# match an already-claimed target keeps its original header instead of colliding.
 col_mapping = {}
+claimed_targets = set()
+skipped_duplicates = []
+
+
+def claim(col, target):
+    if target in claimed_targets:
+        skipped_duplicates.append((col, target))
+        return
+    col_mapping[col] = target
+    claimed_targets.add(target)
+
+
 for col in df_raw.columns:
     c_low = col.lower()
     if c_low == 'date' or ('date' in c_low and 'reporting' in c_low):
-        col_mapping[col] = 'Date'
+        claim(col, 'Date')
     elif 'portfolio' in c_low:
-        col_mapping[col] = 'Portfolio Name'
+        claim(col, 'Portfolio Name')
     elif c_low == 'sku' or c_low == 'advertised sku':
-        col_mapping[col] = 'SKU'
+        claim(col, 'SKU')
     elif c_low == 'campaign name':
-        col_mapping[col] = 'Campaign Name'
+        claim(col, 'Campaign Name')
     elif c_low == 'spend' and not any(x in c_low for x in ['acos', 'roas']):
-        col_mapping[col] = 'Spend'
+        claim(col, 'Spend')
     elif ('sales' in c_low or 'revenue' in c_low) and not any(x in c_low for x in ['acos', 'roas', 'sku', 'other']):
-        col_mapping[col] = 'Sales'
+        claim(col, 'Sales')
     elif c_low == 'clicks':
-        col_mapping[col] = 'Clicks'
+        claim(col, 'Clicks')
     elif c_low == 'impressions':
-        col_mapping[col] = 'Impressions'
+        claim(col, 'Impressions')
+
+if skipped_duplicates:
+    detail = "; ".join(f"'{col}' also looked like {target}" for col, target in skipped_duplicates)
+    st.sidebar.info(
+        f"ℹ️ Some columns matched a field that was already mapped, so they were left "
+        f"under their original name rather than overwriting it: {detail}"
+    )
 
 df_raw = df_raw.rename(columns=col_mapping)
 
@@ -119,11 +159,17 @@ if 'Date' not in df_raw.columns:
 df_raw['Date'] = pd.to_datetime(df_raw['Date'], errors='coerce')
 df_raw = df_raw.dropna(subset=['Date'])
 
+# --- Layer 3: defensive Series check. Even with Layers 1-2 in place, this keeps
+# the numeric-cleanup loop from ever crashing the same way again if some other
+# code path reintroduces a duplicate label in the future.
 for c in ['Spend', 'Sales', 'Clicks', 'Impressions']:
     if c in df_raw.columns:
-        if df_raw[c].dtype == object:
-            df_raw[c] = df_raw[c].astype(str).str.replace(r'[%\$,]', '', regex=True)
-        df_raw[c] = pd.to_numeric(df_raw[c], errors='coerce').fillna(0.0)
+        col_data = df_raw[c]
+        if isinstance(col_data, pd.DataFrame):
+            col_data = col_data.iloc[:, 0]
+        if col_data.dtype == object:
+            col_data = col_data.astype(str).str.replace(r'[%\$,]', '', regex=True)
+        df_raw[c] = pd.to_numeric(col_data, errors='coerce').fillna(0.0)
     else:
         df_raw[c] = 0.0
 
@@ -155,6 +201,15 @@ df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 # Filter master processing dataset to valid mapped active FBA segments only
 df_processed = df_included_auditing.copy()
 
+if df_processed.empty:
+    st.error(
+        "No rows matched the FBA routing rules (portfolio name must contain 'fba' "
+        "and must not contain 'viz'/'vizari'). Check the 'Excluded Portfolios' log "
+        "at the bottom of the page once data loads, or verify the Portfolio Name "
+        "column in your file."
+    )
+    st.stop()
+
 # ---------------------------------------------------------------------------------
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
 # ---------------------------------------------------------------------------------
@@ -184,7 +239,10 @@ if biz_file:
             df_b = pd.read_csv(biz_file)
         else:
             df_b = pd.read_excel(biz_file)
-        
+
+        if df_b.columns.duplicated().any():
+            df_b = df_b.loc[:, ~df_b.columns.duplicated()]
+
         if len(df_b.columns) >= 21:
             sku_header = df_b.columns[3]
             sales_header = df_b.columns[20]
@@ -196,6 +254,12 @@ if biz_file:
             biz_sales_p2 = df_filtered['Parsed_Rev'].sum()
             if biz_sales_p2 > 0:
                 has_tacos_p2 = True
+        else:
+            st.sidebar.warning(
+                f"Business report has only {len(df_b.columns)} columns; expected at "
+                f"least 21 to locate the SKU and Sales columns by position. TACoS will "
+                f"show as N/A."
+            )
     except Exception as e:
         st.sidebar.error(f"Error parsing business sheet: {e}")
 
