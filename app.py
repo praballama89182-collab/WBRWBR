@@ -142,6 +142,8 @@ for col in df_raw.columns:
         claim(col, 'Clicks')
     elif c_low == 'impressions':
         claim(col, 'Impressions')
+    elif 'country' in c_low or c_low == 'marketplace':
+        claim(col, 'Country')
 
 if skipped_duplicates:
     detail = "; ".join(f"'{col}' also looked like {target}" for col, target in skipped_duplicates)
@@ -211,6 +213,27 @@ if df_processed.empty:
     st.stop()
 
 # ---------------------------------------------------------------------------------
+# 🌎 COUNTRY SELECTOR — for reports that combine multiple marketplaces
+# (e.g. exporting US + CA + MX Sponsored Products data into one file). Only
+# shown when a Country column was actually found in the upload; a single-
+# marketplace file just skips straight past this with everything included.
+# ---------------------------------------------------------------------------------
+if 'Country' in df_processed.columns:
+    country_options = sorted(df_processed['Country'].dropna().unique().tolist())
+    if len(country_options) > 1:
+        st.sidebar.markdown("---")
+        selected_country = st.sidebar.selectbox(
+            "🌎 Country", ["All countries"] + country_options,
+            help="This file contains more than one marketplace — pick one to focus the whole console on it.",
+        )
+        if selected_country != "All countries":
+            df_processed = df_processed[df_processed['Country'] == selected_country]
+    else:
+        selected_country = country_options[0] if country_options else "All countries"
+else:
+    selected_country = "All countries"
+
+
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
 # ---------------------------------------------------------------------------------
 st.sidebar.markdown("---")
@@ -315,6 +338,9 @@ t_ac_core = (t_sp_core / t_sl_core * 100) if t_sl_core > 0 else 0.0
 unique_brands = p2_core_fba['Brand Prefix'].nunique()
 
 # KPI Header Cards Ribbon (Now representing Core FBA strictly)
+st.caption(
+    f"🌎 {selected_country} · Comparing {p1_start} → {p1_end} (Prev) vs {p2_start} → {p2_end} (This Wk)"
+)
 col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
 with col_kpi1: 
     st.markdown(f"<div class='kpi-card'><h4>Active Brands</h4><h2>{unique_brands}</h2><p>Core FBA SKU Prefixes</p></div>", unsafe_allow_html=True)
