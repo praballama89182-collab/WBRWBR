@@ -25,10 +25,7 @@ st.markdown("---")
 def load_core_fba_asins(fba_file):
     """Loads and normalizes the Core FBA ASIN master list."""
     try:
-        if isinstance(fba_file, str):
-            fba_df = pd.read_excel(fba_file)
-        else:
-            fba_df = pd.read_excel(fba_file)
+        fba_df = pd.read_excel(fba_file)
         return set(fba_df["ASIN"].dropna().astype(str).str.strip().str.upper())
     except Exception as e:
         return set()
@@ -92,12 +89,6 @@ br_file = st.sidebar.file_uploader("2. Business Report (CSV/Excel)", type=["csv"
 sp_file = st.sidebar.file_uploader("3. Sponsored Products Report (CSV/Excel)", type=["csv", "xlsx"])
 
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Portfolio Exclusion Rules")
-exclude_keywords = st.sidebar.multiselect(
-    "Excluded Portfolio Keywords",
-    options=["Vizari", "FBM", "CBT", "Ageing", "Exclusive"],
-    default=["Vizari", "FBM", "CBT", "Ageing"]
-)
 
 # Load FBA Master List
 if fba_master_file:
@@ -118,10 +109,6 @@ fba_filtered_df = pd.DataFrame()
 
 if br_file:
     fba_prod_sales, fba_b2b_sales, fba_combined_sales, fba_filtered_df = process_business_report(br_file, core_fba_asins)
-    st.sidebar.markdown("---")
-    st.sidebar.metric("FBA Product Sales", f"${fba_prod_sales:,.2f}")
-    st.sidebar.metric("FBA B2B Sales", f"${fba_b2b_sales:,.2f}")
-    st.sidebar.metric("FBA Total Combined Sales", f"${fba_combined_sales:,.2f}")
 
 # ------------------------------------------------------------------------------
 # 3. DASHBOARD CONSOLE ENGINE
@@ -141,19 +128,46 @@ if sp_file and br_file:
     impr_c = [c for c in sp_df.columns if "impression" in c.lower()][0]
     port_c = [c for c in sp_df.columns if "portfolio" in c.lower()]
     camp_c = [c for c in sp_df.columns if "campaign" in c.lower()][0]
+    country_c = [c for c in sp_df.columns if "country" in c.lower() or "marketplace" in c.lower()]
 
+    # Parse standard metrics
     sp_df["Spend_Clean"] = sp_df[spend_c].apply(parse_currency)
     sp_df["Sales_Clean"] = sp_df[sales_c].apply(parse_currency)
     sp_df["Clicks_Clean"] = pd.to_numeric(sp_df[clicks_c].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
     sp_df["Impressions_Clean"] = pd.to_numeric(sp_df[impr_c].astype(str).str.replace(",", ""), errors="coerce").fillna(0)
     sp_df["Portfolio_Name"] = sp_df[port_c[0]].fillna("Unassigned") if port_c else "Unassigned"
 
-    # Routing Engine: Exclude Non-FBA/Specified Portfolios
-    pattern = "|".join([re.escape(k) for k in exclude_keywords]) if exclude_keywords else "a^"
-    included_sp_df = sp_df[~sp_df["Portfolio_Name"].str.contains(pattern, case=False, regex=True)].copy()
-    excluded_sp_df = sp_df[sp_df["Portfolio_Name"].str.contains(pattern, case=False, regex=True)].copy()
+    # --- COUNTRY FILTER IN SIDEBAR ---
+    st.sidebar.header("🌍 Country Filter")
+    if country_c:
+        country_col_name = country_c[0]
+        unique_countries = sorted(sp_df[country_col_name].dropna().unique())
+        selected_country = st.sidebar.selectbox("Select Country", options=unique_countries)
+        
+        # Filter dataframe by single selected country
+        country_sp_df = sp_df[sp_df[country_col_name] == selected_country].copy()
+    else:
+        st.sidebar.warning("No 'Country' column detected in Ad Report. Using full dataset.")
+        country_sp_df = sp_df.copy()
+        selected_country = "All Countries"
 
-    # Core Metrics Calculations
+    # --- PORTFOLIO OMISSION RULES (PER COUNTRY) ---
+    st.sidebar.markdown("---")
+    st.sidebar.header("⚙️ Portfolio Exclusion Rules")
+    
+    available_portfolios = sorted(country_sp_df["Portfolio_Name"].unique())
+    exclude_keywords = st.sidebar.multiselect(
+        f"Excluded Portfolio Keywords ({selected_country})",
+        options=["Vizari", "FBM", "CBT", "Ageing", "Exclusive"],
+        default=["Vizari", "FBM", "CBT", "Ageing"]
+    )
+
+    # Routing Engine: Exclude specified Portfolios for selected country
+    pattern = "|".join([re.escape(k) for k in exclude_keywords]) if exclude_keywords else "a^"
+    included_sp_df = country_sp_df[~country_sp_df["Portfolio_Name"].str.contains(pattern, case=False, regex=True)].copy()
+    excluded_sp_df = country_sp_df[country_sp_df["Portfolio_Name"].str.contains(pattern, case=False, regex=True)].copy()
+
+    # Core Metrics Calculations (Country-Specific)
     total_ad_spend = included_sp_df["Spend_Clean"].sum()
     total_ad_sales = included_sp_df["Sales_Clean"].sum()
     total_clicks = included_sp_df["Clicks_Clean"].sum()
@@ -164,7 +178,13 @@ if sp_file and br_file:
     ctr_pct = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
     cpc = (total_ad_spend / total_clicks) if total_clicks > 0 else 0.0
 
+    # Display Sidebar Summary Metrics for Selected Country
+    st.sidebar.markdown("---")
+    st.sidebar.metric(f"Ad Spend ({selected_country})", f"${total_ad_spend:,.2f}")
+    st.sidebar.metric(f"Ad Sales ({selected_country})", f"${total_ad_sales:,.2f}")
+
     # Dynamic KPI Ribbon
+    st.markdown(f"### Current View: **{selected_country}**")
     kpi1, kpi2, kpi3, kpi4, kpi5, kpi6 = st.columns(6)
     kpi1.metric("Total FBA Sales", f"${fba_combined_sales:,.2f}")
     kpi2.metric("Total Ad Spend", f"${total_ad_spend:,.2f}")
@@ -176,7 +196,7 @@ if sp_file and br_file:
     st.markdown("---")
 
     # --------------------------------------------------------------------------
-    # FULL MULTI-TAB NAVIGATION CONSOLE
+    # MULTI-TAB NAVIGATION CONSOLE
     # --------------------------------------------------------------------------
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📌 Executive Overview",
@@ -189,7 +209,7 @@ if sp_file and br_file:
 
     # --- TAB 1: EXECUTIVE OVERVIEW ---
     with tab1:
-        st.subheader("Executive WBR Performance Summary")
+        st.subheader(f"Executive WBR Performance Summary ({selected_country})")
         col_left, col_right = st.columns(2)
 
         with col_left:
@@ -238,7 +258,7 @@ if sp_file and br_file:
 
     # --- TAB 2: PORTFOLIO PERFORMANCE ---
     with tab2:
-        st.subheader("Portfolio Segmentation & TACoS Contribution")
+        st.subheader(f"Portfolio Segmentation & TACoS Contribution ({selected_country})")
         
         port_df = included_sp_df.groupby("Portfolio_Name").agg(
             Ad_Spend=("Spend_Clean", "sum"),
@@ -248,7 +268,7 @@ if sp_file and br_file:
         ).reset_index()
 
         port_df["ACoS %"] = np.where(port_df["Ad_Sales"] > 0, (port_df["Ad_Spend"] / port_df["Ad_Sales"]) * 100, 0)
-        port_df["Share of Ad Spend %"] = (port_df["Ad_Spend"] / total_ad_spend) * 100
+        port_df["Share of Ad Spend %"] = (port_df["Ad_Spend"] / total_ad_spend * 100) if total_ad_spend > 0 else 0
         port_df["TACoS Contribution %"] = np.where(fba_combined_sales > 0, (port_df["Ad_Spend"] / fba_combined_sales) * 100, 0)
 
         # Formatting
@@ -263,9 +283,8 @@ if sp_file and br_file:
 
     # --- TAB 3: BRAND PREFIX ANALYTICS ---
     with tab3:
-        st.subheader("Brand Prefix Breakdown")
+        st.subheader(f"Brand Prefix Breakdown ({selected_country})")
         
-        # Extract 4-letter prefix from Campaign Name if present
         included_sp_df["Brand_Prefix"] = included_sp_df[camp_c].astype(str).str.extract(r"^([A-Za-z0-9]{4})_")[0].str.upper().fillna("OTHER")
 
         prefix_df = included_sp_df.groupby("Brand_Prefix").agg(
@@ -275,7 +294,7 @@ if sp_file and br_file:
         ).reset_index().sort_values(by="Ad_Spend", ascending=False)
 
         prefix_df["ACoS %"] = np.where(prefix_df["Ad_Sales"] > 0, (prefix_df["Ad_Spend"] / prefix_df["Ad_Sales"]) * 100, 0)
-        prefix_df["Share of Ad Spend %"] = (prefix_df["Ad_Spend"] / total_ad_spend) * 100
+        prefix_df["Share of Ad Spend %"] = (prefix_df["Ad_Spend"] / total_ad_spend * 100) if total_ad_spend > 0 else 0
 
         # Formatting
         prefix_display = prefix_df.copy()
@@ -288,13 +307,13 @@ if sp_file and br_file:
 
     # --- TAB 4: AUTOMATED STRATEGY INSIGHTS ---
     with tab4:
-        st.subheader("💡 Automated WBR Optimization Insights")
+        st.subheader(f"💡 Automated Optimization Insights ({selected_country})")
 
         high_spend_no_sales = included_sp_df[(included_sp_df["Spend_Clean"] > 50) & (included_sp_df["Sales_Clean"] == 0)]
         high_acos_camps = included_sp_df[(included_sp_df["Sales_Clean"] > 0) & ((included_sp_df["Spend_Clean"] / included_sp_df["Sales_Clean"]) > 0.60)]
 
-        st.markdown(f"* **Wasted Spend Alert:** Identified **{len(high_spend_no_sales)} campaigns** with > $50 spend and zero sales, totaling **${high_spend_no_sales['Spend_Clean'].sum():,.2f}** in wasted spend.")
-        st.markdown(f* "**High ACoS Warning:** **{len(high_acos_camps)} campaigns** are running at > 60% ACoS.")
+        st.markdown(f"• **Wasted Spend Alert:** Identified **{len(high_spend_no_sales)} campaigns** with > $50 spend and zero sales, totaling **${high_spend_no_sales['Spend_Clean'].sum():,.2f}** in wasted spend.")
+        st.markdown(f"• **High ACoS Warning:** **{len(high_acos_camps)} campaigns** are running at > 60% ACoS.")
 
         if tacos_pct > 15.0:
             st.warning(f"⚠️ **High TACoS Warning:** Current TACoS is **{tacos_pct:.2f}%**, exceeding the 15% target threshold. Review high ACoS targets.")
@@ -319,8 +338,8 @@ if sp_file and br_file:
 
     # --- TAB 6: EXCLUDED CAMPAIGN LOG ---
     with tab6:
-        st.subheader("🛡️ Excluded Portfolios & Campaigns Audit Log")
-        st.write(f"Isolated **{len(excluded_sp_df):,}** campaign rows based on keywords: `{exclude_keywords}`")
+        st.subheader(f"🛡️ Excluded Portfolios Audit Log ({selected_country})")
+        st.write(f"Isolated **{len(excluded_sp_df):,}** campaign rows in **{selected_country}** based on keywords: `{exclude_keywords}`")
 
         if len(excluded_sp_df) > 0:
             st.dataframe(
@@ -330,7 +349,7 @@ if sp_file and br_file:
                 use_container_width=True
             )
         else:
-            st.info("No campaigns matched the exclusion criteria.")
+            st.info("No campaigns matched the exclusion criteria for this country.")
 
 else:
     st.info("👈 Please upload the **Business Report** and **Sponsored Products Report** in the sidebar to activate the console.")
