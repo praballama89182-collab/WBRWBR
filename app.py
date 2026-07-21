@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+
 # ---------------------------------------------------------------------------------
 # 🎨 EXECUTIVE ARCHITECTURE & GLOBAL PALETTE SETUP
 # ---------------------------------------------------------------------------------
@@ -9,6 +10,31 @@ HEX_DEEP_BLUE = "#1652A3"
 HEX_DARK_SLATE = "#3A414B"
 HEX_LIGHT_BLUE = "#D5DEE7"
 HEX_VIBRANT_BLUE = "#2F88F5"
+
+# Currency follows the selected country: US = $, Canada = C$, Mexico = MX$.
+# NOTE: Streamlit's markdown renderer treats a PAIR of literal "$" characters
+# within the same plain-text call (st.caption/st.warning/st.markdown without
+# unsafe_allow_html, st.write, expander labels) as LaTeX math-mode delimiters,
+# silently dropping/mangling whatever sits between them. The raw currency_symbol
+# is safe inside raw-HTML blocks (unsafe_allow_html=True), Styler.format()
+# strings, and Plotly labels — none of those go through that markdown math
+# parser. currency_symbol_md (backslash-escaped) is for plain-markdown text
+# where two or more currency mentions might land in the same call.
+CURRENCY_MAP = {
+    "united states": {"symbol": "$", "code": "USD"},
+    "us": {"symbol": "$", "code": "USD"},
+    "usa": {"symbol": "$", "code": "USD"},
+    "canada": {"symbol": "C$", "code": "CAD"},
+    "ca": {"symbol": "C$", "code": "CAD"},
+    "mexico": {"symbol": "MX$", "code": "MXN"},
+    "mx": {"symbol": "MX$", "code": "MXN"},
+}
+DEFAULT_CURRENCY = {"symbol": "$", "code": ""}
+
+
+def currency_for(country_name) -> dict:
+    return CURRENCY_MAP.get(str(country_name).strip().lower(), DEFAULT_CURRENCY)
+
 
 st.set_page_config(
     page_title="MerchantSpring | Advertising & Total Sales WBR Engine",
@@ -217,42 +243,53 @@ if 'Country' in df_raw.columns:
 else:
     df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
 
-df_included_auditing = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
-df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
+# ---------------------------------------------------------------------------------
+# 🌎 COUNTRY SELECTOR — single-select only. Portfolio qualifying rules (FBA vs
+# NARF) and currency both differ by marketplace, so — unlike the earlier
+# multi-country "All countries" option — only one country can be in view at a
+# time. This runs BEFORE the included/excluded audit views are built below, so
+# the portfolio list, KPIs, tables, and audit logs all reshuffle to show only
+# what actually qualifies for the selected country, instead of a blended view.
+# ---------------------------------------------------------------------------------
+if 'Country' in df_raw.columns:
+    country_options = sorted(df_raw['Country'].dropna().unique().tolist())
+else:
+    country_options = []
+
+if country_options:
+    default_country = 'United States' if 'United States' in country_options else country_options[0]
+    st.sidebar.markdown("---")
+    selected_country = st.sidebar.selectbox(
+        "🌎 Country", country_options,
+        index=country_options.index(default_country),
+        help="One country at a time — portfolio qualifying rules (e.g. Mexico uses "
+             "'NARF_' naming instead of 'FBA_') and currency both differ by "
+             "marketplace, so mixing countries together isn't meaningful here.",
+    )
+    df_country_scoped = df_raw[df_raw['Country'] == selected_country]
+else:
+    selected_country = "N/A"
+    df_country_scoped = df_raw
+
+currency_symbol = currency_for(selected_country)["symbol"]
+currency_code = currency_for(selected_country)["code"]
+st.sidebar.caption(f"💱 Currency: {currency_code or currency_symbol} ({currency_symbol})")
+currency_symbol_md = currency_symbol.replace("$", "\\$")
+
+df_included_auditing = df_country_scoped[df_country_scoped['Mapped Portfolio'] != 'EXCLUDE_FILTER']
+df_excluded_auditing = df_country_scoped[df_country_scoped['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 
 # Filter master processing dataset to valid mapped active FBA segments only
 df_processed = df_included_auditing.copy()
 
 if df_processed.empty:
     st.error(
-        "No rows matched the routing rules (portfolio name must contain 'fba' and "
-        "must not contain 'viz'/'vizari' — except for Mexico, which includes every "
-        "portfolio except Vizari regardless of naming). Check the 'Excluded "
-        "Portfolios' log at the bottom of the page once data loads, or verify the "
-        "Portfolio Name / Country columns in your file."
+        "No rows matched the routing rules for this country (portfolio name must "
+        "contain 'fba' — or 'narf' for Mexico — and must not contain 'viz'/'vizari'). "
+        "Check the 'Excluded Portfolios' log at the bottom of the page once data "
+        "loads, or verify the Portfolio Name column in your file."
     )
     st.stop()
-
-# ---------------------------------------------------------------------------------
-# 🌎 COUNTRY SELECTOR — for reports that combine multiple marketplaces
-# (e.g. exporting US + CA + MX Sponsored Products data into one file). Only
-# shown when a Country column was actually found in the upload; a single-
-# marketplace file just skips straight past this with everything included.
-# ---------------------------------------------------------------------------------
-if 'Country' in df_processed.columns:
-    country_options = sorted(df_processed['Country'].dropna().unique().tolist())
-    if len(country_options) > 1:
-        st.sidebar.markdown("---")
-        selected_country = st.sidebar.selectbox(
-            "🌎 Country", ["All countries"] + country_options,
-            help="This file contains more than one marketplace — pick one to focus the whole console on it.",
-        )
-        if selected_country != "All countries":
-            df_processed = df_processed[df_processed['Country'] == selected_country]
-    else:
-        selected_country = country_options[0] if country_options else "All countries"
-else:
-    selected_country = "All countries"
 
 
 # 📅 TWO-PERIOD DATE SELECTION FUNNEL
@@ -407,9 +444,9 @@ col_kpi1, col_kpi2, col_kpi3, col_kpi4, col_kpi5 = st.columns(5)
 with col_kpi1: 
     st.markdown(f"<div class='kpi-card'><h4>Active Brands</h4><h2>{unique_brands}</h2><p>Core FBA SKU Prefixes</p></div>", unsafe_allow_html=True)
 with col_kpi2: 
-    st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>Core FBA Spend</h4><h2>${t_sp_core:,.2f}</h2><p>Excludes Excl/CBT/Ageing</p></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-card' style='border-top-color: {HEX_VIBRANT_BLUE};'><h4>Core FBA Spend</h4><h2>{currency_symbol}{t_sp_core:,.2f}</h2><p>Excludes Excl/CBT/Ageing</p></div>", unsafe_allow_html=True)
 with col_kpi3: 
-    st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>Core FBA Sales</h4><h2>${t_sl_core:,.2f}</h2><p>Core Attributed Rev</p></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='kpi-card' style='border-top-color: #2ECC71;'><h4>Core FBA Sales</h4><h2>{currency_symbol}{t_sl_core:,.2f}</h2><p>Core Attributed Rev</p></div>", unsafe_allow_html=True)
 with col_kpi4: 
     st.markdown(f"<div class='kpi-card' style='border-top-color: #E67E22;'><h4>Core Blended ACoS</h4><h2>{t_ac_core:.2f}%</h2><p>Total Core Spends / Sales</p></div>", unsafe_allow_html=True)
 with col_kpi5:
@@ -475,8 +512,8 @@ with tabs[0]:
     
     high_level_data = {
         "Portfolio": ["FBA"],
-        "Ad Sales": [f"${t_sl_core:,.2f}"],
-        "Ad Spends": [f"${t_sp_core:,.2f}"],
+        "Ad Sales": [f"{currency_symbol}{t_sl_core:,.2f}"],
+        "Ad Spends": [f"{currency_symbol}{t_sp_core:,.2f}"],
         "ACoS": [f"{t_ac_core:.2f}%"],
         "TACoS": [f"{((t_sp_core / biz_sales_p2 * 100) if has_tacos_p2 else 0.0):.2f}%" if has_tacos_p2 else "N/A"]
     }
@@ -499,8 +536,8 @@ with tabs[1]:
     
     st.dataframe(
         final_port.style.apply(style_comparison_matrix, axis=None).format({
-            'Spend (Prev)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
-            'Sales (Prev)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
+            'Spend (Prev)': f'{currency_symbol}{{:,.2f}}', 'Spend (This Wk)': f'{currency_symbol}{{:,.2f}}',
+            'Sales (Prev)': f'{currency_symbol}{{:,.2f}}', 'Sales (This Wk)': f'{currency_symbol}{{:,.2f}}',
             'ACoS % (Prev)': '{:.2f}%', 'ACoS % (This Wk)': '{:.2f}%'
         }),
         use_container_width=True
@@ -538,8 +575,8 @@ with tabs[2]:
     
     st.dataframe(
         top_20_sbs.style.apply(style_comparison_matrix, axis=None).format({
-            'Spend (Last Wk)': '${:,.2f}', 'Spend (This Wk)': '${:,.2f}',
-            'Sales (Last Wk)': '${:,.2f}', 'Sales (This Wk)': '${:,.2f}',
+            'Spend (Last Wk)': f'{currency_symbol}{{:,.2f}}', 'Spend (This Wk)': f'{currency_symbol}{{:,.2f}}',
+            'Sales (Last Wk)': f'{currency_symbol}{{:,.2f}}', 'Sales (This Wk)': f'{currency_symbol}{{:,.2f}}',
             'ACoS (Last Wk)': '{:.2f}%', 'ACoS (This Wk)': '{:.2f}%'
         }),
         use_container_width=True
@@ -556,7 +593,7 @@ with tabs[3]:
     if best_port_row is not None:
         p_seg_name = best_port_row['Portfolio Segment']
         st.markdown(f"<div class='insight-header'>🟢 Portfolio Strategy Win: '{p_seg_name}' Segment Efficiency Optimized</div>", unsafe_allow_html=True)
-        st.markdown(f"**ACoS decreased from {best_port_row['ACoS % (Prev)']:.2f}% to {best_port_row['ACoS % (This Wk)']:.2f}% as sales scaled to ${best_port_row['Sales (This Wk)']:,.2f}.**")
+        st.markdown(f"**ACoS decreased from {best_port_row['ACoS % (Prev)']:.2f}% to {best_port_row['ACoS % (This Wk)']:.2f}% as sales scaled to {currency_symbol}{best_port_row['Sales (This Wk)']:,.2f}.**")
         
         sub_camps = df_p2[df_p2['Mapped Portfolio'] == p_seg_name].groupby('Campaign Name').agg({'Sales':'sum', 'Spend':'sum'}).reset_index()
         top_camp_name = sub_camps.sort_values(by='Sales', ascending=False).iloc[0]['Campaign Name'] if not sub_camps.empty else "Core Placements"
@@ -569,7 +606,7 @@ with tabs[3]:
         best_b_row = valid_wins.sort_values(by='Sales (This Wk)', ascending=False).iloc[0]
         b_pfx = best_b_row['Brand Prefix']
         st.markdown(f"<div class='insight-header'>🟢 Vendor Brand Win: Prefix '{b_pfx}' Scales Profitable Volume</div>", unsafe_allow_html=True)
-        st.markdown(f"**ACoS improved from {best_b_row['ACoS (Last Wk)']:.2f}% down to {best_b_row['ACoS (This Wk)']:.2f}% with total sales crossing ${best_b_row['Sales (This Wk)']:,.2f}.**")
+        st.markdown(f"**ACoS improved from {best_b_row['ACoS (Last Wk)']:.2f}% down to {best_b_row['ACoS (This Wk)']:.2f}% with total sales crossing {currency_symbol}{best_b_row['Sales (This Wk)']:,.2f}.**")
         st.write(f"The `{b_pfx}` vendor product catalog effectively hit scaling velocity by focusing on top-performing search term manual campaigns. Restricting lower-intent advertising leak areas minimized wasted spend, which improved target operating efficiency while protecting visibility on top revenue-driving listings.")
 
     # 3. Failures & Loss Corrections
@@ -588,7 +625,7 @@ with tabs[3]:
         poor_b_row = valid_fails.sort_values(by='ACoS (This Wk)', ascending=False).iloc[0]
         b_pfx_fail = poor_b_row['Brand Prefix']
         st.markdown(f"<div class='insight-header'>🔴 Vendor Brand Failure: Prefix `{b_pfx_fail}` Over-Indexed Costs</div>", unsafe_allow_html=True)
-        st.markdown(f"**ACoS deteriorated from {poor_b_row['ACoS (Last Wk)']:.2f}% up to {poor_b_row['ACoS (This Wk)']:.2f}% despite grossing ${poor_b_row['Sales (This Wk)']:,.2f} in sales.**")
+        st.markdown(f"**ACoS deteriorated from {poor_b_row['ACoS (Last Wk)']:.2f}% up to {poor_b_row['ACoS (This Wk)']:.2f}% despite grossing {currency_symbol}{poor_b_row['Sales (This Wk)']:,.2f} in sales.**")
         st.write(f"While the `{b_pfx_fail}` inventory line maintains solid revenue volume, it is running into rising costs due to competitive bidding from other sellers. Higher click costs and lower page conversion rates mean an optimization sweep is needed to cut out low-converting search terms and protect net product margins.")
 
     # Master Workbook Export Engine
