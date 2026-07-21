@@ -182,21 +182,42 @@ if 'Campaign Name' not in df_raw.columns: df_raw['Campaign Name'] = 'Generic Cam
 # ---------------------------------------------------------------------------------
 # ⚙️ REFINED SEGMENTATION ROUTING FUNNEL
 # ---------------------------------------------------------------------------------
-def assign_wbr_portfolio(name):
+# Each marketplace uses its own naming convention for the qualifying portfolio
+# prefix: most countries (including Canada) use "FBA_", Mexico uses "NARF_".
+# Vizari is excluded everywhere regardless of country or naming convention.
+MEXICO_NAMES = {'mexico', 'mx'}
+
+
+def required_prefix_for(country_str):
+    return 'narf' if country_str in MEXICO_NAMES else 'fba'
+
+
+def assign_wbr_portfolio(name, country=''):
     name_str = str(name).strip().lower()
-    
-    # Exclude non-FBA or Vizari items instantly
-    if 'fba' not in name_str or 'viz' in name_str or 'vizari' in name_str:
+    country_str = str(country).strip().lower()
+
+    if 'viz' in name_str or 'vizari' in name_str:
         return 'EXCLUDE_FILTER'
-        
-    # Isolate drop segments
+
+    if required_prefix_for(country_str) not in name_str:
+        return 'EXCLUDE_FILTER'
+
+    # Isolate drop segments. MAP is intentionally NOT split out here — MAP-named
+    # portfolios fall through to the 'fba' bucket below and are counted as part
+    # of core FBA, unlike Exclusive/Ageing/CBT which remain their own segments.
     if 'exclusive' in name_str: return 'exclusive'
     elif 'ageing' in name_str: return 'ageing'
     elif 'cbt' in name_str: return 'cbt'
-    elif 'map' in name_str: return 'map'
     else: return 'fba'
 
-df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
+
+if 'Country' in df_raw.columns:
+    df_raw['Mapped Portfolio'] = df_raw.apply(
+        lambda r: assign_wbr_portfolio(r['Portfolio Name'], r['Country']), axis=1
+    )
+else:
+    df_raw['Mapped Portfolio'] = df_raw['Portfolio Name'].apply(assign_wbr_portfolio)
+
 df_included_auditing = df_raw[df_raw['Mapped Portfolio'] != 'EXCLUDE_FILTER']
 df_excluded_auditing = df_raw[df_raw['Mapped Portfolio'] == 'EXCLUDE_FILTER']
 
@@ -205,10 +226,11 @@ df_processed = df_included_auditing.copy()
 
 if df_processed.empty:
     st.error(
-        "No rows matched the FBA routing rules (portfolio name must contain 'fba' "
-        "and must not contain 'viz'/'vizari'). Check the 'Excluded Portfolios' log "
-        "at the bottom of the page once data loads, or verify the Portfolio Name "
-        "column in your file."
+        "No rows matched the routing rules (portfolio name must contain 'fba' and "
+        "must not contain 'viz'/'vizari' — except for Mexico, which includes every "
+        "portfolio except Vizari regardless of naming). Check the 'Excluded "
+        "Portfolios' log at the bottom of the page once data loads, or verify the "
+        "Portfolio Name / Country columns in your file."
     )
     st.stop()
 
@@ -287,9 +309,50 @@ if df_p1.empty:
 if df_p2.empty:
     st.sidebar.warning("No rows fall inside the P2 date range — all 'This Wk' metrics and the KPI cards will show $0.")
 
-# Rigidly force localization of the 4-letter brand identifier key to protect slices
-df_p1['Brand Prefix'] = df_p1['SKU'].astype(str).str[:4].str.upper()
-df_p2['Brand Prefix'] = df_p2['SKU'].astype(str).str[:4].str.upper()
+# Brand/vendor prefix identification. For most countries this is the first 4
+# characters of the SKU (unchanged, original behavior). Canada and Mexico
+# structure their portfolios by vendor instead: the text after "FBA_" (Canada)
+# or "NARF_" (Mexico) in the Portfolio Name IS the brand/vendor name, so for
+# those two countries the prefix is extracted from there instead — grouping by
+# it below then naturally rolls up "all campaigns for that vendor" together.
+CA_MARKER = 'fba_'
+MX_MARKER = 'narf_'
+
+
+def extract_marker_suffix(portfolio_name, marker):
+    name = str(portfolio_name)
+    idx = name.lower().find(marker)
+    if idx == -1:
+        return None
+    remainder = name[idx + len(marker):].strip(' _-')
+    return remainder.upper() if remainder else None
+
+
+def compute_brand_prefix(row):
+    country_str = str(row.get('Country', '')).strip().lower()
+    portfolio_name = row.get('Portfolio Name', '')
+
+    if country_str == 'canada' or country_str == 'ca':
+        extracted = extract_marker_suffix(portfolio_name, CA_MARKER)
+        if extracted:
+            return extracted
+    elif country_str in MEXICO_NAMES:
+        extracted = extract_marker_suffix(portfolio_name, MX_MARKER)
+        if extracted:
+            return extracted
+
+    return str(row.get('SKU', ''))[:4].upper()
+
+
+if 'Country' in df_p1.columns:
+    df_p1['Brand Prefix'] = df_p1.apply(compute_brand_prefix, axis=1)
+else:
+    df_p1['Brand Prefix'] = df_p1['SKU'].astype(str).str[:4].str.upper()
+
+if 'Country' in df_p2.columns:
+    df_p2['Brand Prefix'] = df_p2.apply(compute_brand_prefix, axis=1)
+else:
+    df_p2['Brand Prefix'] = df_p2['SKU'].astype(str).str[:4].str.upper()
 
 # ---------------------------------------------------------------------------------
 # ⚡️ SELLER CENTRAL BUSINESS REPORT PARSING ENGINE (PRESENT WEEK ONLY)
@@ -328,9 +391,9 @@ if biz_file:
         st.sidebar.error(f"Error parsing business sheet: {e}")
 
 # ---------------------------------------------------------------------------------
-# 🧮 UNIFIED CORE FBA CALCULATIONS (EXCLUDES EXCLUSIVE, CBT, AGEING IN BOTH)
+# 🧮 UNIFIED CORE FBA CALCULATIONS (EXCLUDES EXCLUSIVE, CBT, AGEING; MAP IS PART OF FBA)
 # ---------------------------------------------------------------------------------
-p2_core_fba = df_p2[df_p2['Mapped Portfolio'].isin(['fba', 'map'])]
+p2_core_fba = df_p2[df_p2['Mapped Portfolio'] == 'fba']
 t_sp_core = p2_core_fba['Spend'].sum()
 t_sl_core = p2_core_fba['Sales'].sum()
 
@@ -466,7 +529,13 @@ with tabs[2]:
     top_20_sbs = final_brand_sbs.sort_values(by='Sales (This Wk)', ascending=False).head(20).reset_index(drop=True)
     
     st.markdown("<span class='usecase-tag'>Top 20 Brand Prefix SKU Matrix</span>", unsafe_allow_html=True)
-    st.markdown("<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Dynamic side-by-side metric layout comparison (Last Week vs This Week). Sorted by current high-revenue lines.</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='strategic-banner'><b>Prefix Brand Intelligence:</b> Dynamic side-by-side metric "
+        "layout comparison (Last Week vs This Week). Sorted by current high-revenue lines. For Canada, "
+        "the prefix is the vendor name after <code>FBA_</code> in the portfolio; for Mexico, it's after "
+        "<code>NARF_</code>. Every other country still uses the first 4 characters of the SKU.</div>",
+        unsafe_allow_html=True,
+    )
     
     st.dataframe(
         top_20_sbs.style.apply(style_comparison_matrix, axis=None).format({
